@@ -37,7 +37,7 @@ if not MERAKI_API_KEY:
 dashboard = meraki.DashboardAPI(
     api_key=MERAKI_API_KEY,
     suppress_logging=True,
-    caller="meraki-magic-mcp",
+    caller="MerakiMagicMCP/0.1.0 Anthropic",
     maximum_retries=3,
     wait_on_rate_limit=True,
 )
