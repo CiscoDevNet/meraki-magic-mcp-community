@@ -11,7 +11,7 @@ COPY requirements.txt pyproject.toml ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY meraki-mcp.py meraki-mcp-dynamic.py .env-example ./
+COPY meraki_mcp_config.py meraki-mcp.py meraki-mcp-dynamic.py .env-example ./
 COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 

@@ -12,13 +12,18 @@ import os
 import meraki
 import inspect
 from dotenv import load_dotenv
+from meraki_mcp_config import get_meraki_base_url
 
 # Load environment variables
 load_dotenv()
 
 # Initialize SDK (with dummy key for inspection - won't make calls)
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY", "dummy_key")
-dashboard = meraki.DashboardAPI(api_key=MERAKI_API_KEY, suppress_logging=True)
+dashboard = meraki.DashboardAPI(
+    api_key=MERAKI_API_KEY,
+    base_url=get_meraki_base_url(),
+    suppress_logging=True,
+)
 
 SDK_SECTIONS = [
     'organizations',

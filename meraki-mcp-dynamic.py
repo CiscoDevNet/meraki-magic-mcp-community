@@ -17,6 +17,15 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 from dotenv import load_dotenv
 from pathlib import Path
+from meraki_mcp_config import (
+    CONFIRM_DESTRUCTIVE_ACTION_PARAM,
+    get_meraki_base_url,
+    get_read_only_mode,
+    guard_write_operation,
+    is_read_only_operation,
+    is_write_operation,
+    pop_destructive_confirmation,
+)
 
 # Load environment variables from .env file
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -32,6 +41,7 @@ mcp = FastMCP("Meraki Magic MCP - Full API", host=MCP_HOST, port=MCP_PORT)
 # Configuration
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY")
 MERAKI_ORG_ID = os.getenv("MERAKI_ORG_ID")
+MERAKI_BASE_URL = get_meraki_base_url()
 
 if not MERAKI_API_KEY:
     print("FATAL: MERAKI_API_KEY is not set. Add it to .env or the environment.", file=sys.stderr)
@@ -39,7 +49,7 @@ if not MERAKI_API_KEY:
 
 ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "300"))  # 5 minutes default
-READ_ONLY_MODE = os.getenv("READ_ONLY_MODE", "false").lower() == "true"
+READ_ONLY_MODE = get_read_only_mode()
 
 # Response size management (new)
 MAX_RESPONSE_TOKENS = int(os.getenv("MAX_RESPONSE_TOKENS", "5000"))  # Max tokens in response
@@ -56,6 +66,7 @@ if ENABLE_FILE_CACHING:
 # Initialize Meraki API client with optimizations
 dashboard = meraki.DashboardAPI(
     api_key=MERAKI_API_KEY,
+    base_url=MERAKI_BASE_URL,
     suppress_logging=True,
     maximum_retries=3,  # Auto-retry on failures
     wait_on_rate_limit=True  # Auto-wait on rate limits instead of failing
@@ -236,19 +247,6 @@ SDK_SECTIONS = [
     'administered'
 ]
 
-# Read-only operations (GET methods) - safe to cache
-READ_ONLY_PREFIXES = ['get', 'list']
-# Write operations - check read-only mode
-WRITE_PREFIXES = ['create', 'update', 'delete', 'remove', 'claim', 'reboot', 'assign', 'move', 'renew', 'clone', 'combine', 'split', 'bind', 'unbind']
-
-def is_read_only_operation(method_name: str) -> bool:
-    """Check if operation is read-only"""
-    return any(method_name.startswith(prefix) for prefix in READ_ONLY_PREFIXES)
-
-def is_write_operation(method_name: str) -> bool:
-    """Check if operation is a write/destructive operation"""
-    return any(method_name.startswith(prefix) for prefix in WRITE_PREFIXES)
-
 def create_cache_key(section: str, method: str, kwargs: Dict) -> str:
     """Create a cache key from method call.
     Format: '<section>::<md5hash>' so invalidate(section) clears all related entries.
@@ -264,6 +262,12 @@ def create_cache_key(section: str, method: str, kwargs: Dict) -> str:
 def _call_meraki_method_internal(section: str, method: str, params: dict) -> str:
     """Internal helper to call Meraki API methods"""
     pagination_limited = False
+    params = dict(params or {})
+    confirm_destructive_action = (
+        pop_destructive_confirmation(params)
+        if CONFIRM_DESTRUCTIVE_ACTION_PARAM in params
+        else False
+    )
     original_params = params.copy()
 
     try:
@@ -291,13 +295,9 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
         is_read = is_read_only_operation(method)
         is_write = is_write_operation(method)
 
-        # Read-only mode check
-        if READ_ONLY_MODE and is_write:
-            return json.dumps({
-                "error": "Write operation blocked - READ_ONLY_MODE is enabled",
-                "method": method,
-                "hint": "Set READ_ONLY_MODE=false in .env to enable"
-            }, indent=2)
+        blocked = guard_write_operation(method, READ_ONLY_MODE, confirm_destructive_action)
+        if blocked:
+            return blocked
 
         # Auto-fill org ID if needed
         sig = inspect.signature(method_func)
@@ -659,6 +659,7 @@ async def get_mcp_config() -> str:
         "generic_caller": "call_meraki_api - access all 804+ methods",
         "total_available_methods": "804+",
         "read_only_mode": READ_ONLY_MODE,
+        "meraki_base_url": MERAKI_BASE_URL,
         "caching_enabled": ENABLE_CACHING,
         "cache_ttl_seconds": CACHE_TTL_SECONDS,
         "file_caching_enabled": ENABLE_FILE_CACHING,

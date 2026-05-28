@@ -61,6 +61,17 @@ call_meraki_api(
 - `meraki-mcp-dynamic.py` - Hybrid MCP server (12 pre-registered + generic caller)
 - `meraki-mcp.py` - Original manual MCP server (40 hand-coded endpoints)
 
+## Safety and Region Configuration
+
+The server starts in read-only mode by default. Set `READ_ONLY_MODE=false` only when you intend to run create/update/delete/remove operations. Destructive `delete*` and `remove*` calls also require `confirm_destructive_action=true` in `parameters`.
+
+Set `MERAKI_BASE_URL` to use a non-default Meraki Dashboard API region, for example:
+
+```env
+MERAKI_BASE_URL="https://api.meraki.com/api/v1"
+READ_ONLY_MODE=true
+```
+
 ## Helper Tools Included
 
 Discovery tools to find and use any API method:
@@ -224,6 +235,7 @@ Before testing with your production API key, I recommend:
 3. **Avoid destructive operations until confident**:
    - Anything with `delete` in the name
    - Anything with `update` or `create`
+   - Set `READ_ONLY_MODE=false` and pass `confirm_destructive_action=true` for delete/remove calls only after verifying the target
 
 ## Error Handling
 

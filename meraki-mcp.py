@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 from pathlib import Path
+from meraki_mcp_config import (
+    get_meraki_base_url,
+    get_read_only_mode,
+    guard_write_operation,
+)
 
 # Load environment variables from .env file
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -28,6 +33,8 @@ mcp = FastMCP("Meraki Magic MCP", host=MCP_HOST, port=MCP_PORT)
 # Configuration
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY")
 MERAKI_ORG_ID = os.getenv("MERAKI_ORG_ID")
+MERAKI_BASE_URL = get_meraki_base_url()
+READ_ONLY_MODE = get_read_only_mode()
 
 if not MERAKI_API_KEY:
     print("FATAL: MERAKI_API_KEY is not set. Add it to .env or the environment.", file=sys.stderr)
@@ -36,6 +43,7 @@ if not MERAKI_API_KEY:
 # Initialize Meraki API client using Meraki SDK
 dashboard = meraki.DashboardAPI(
     api_key=MERAKI_API_KEY,
+    base_url=MERAKI_BASE_URL,
     suppress_logging=True,
     caller="MerakiMagicMCP/0.1.0 Anthropic",
     maximum_retries=3,
@@ -64,6 +72,9 @@ def to_async(func: Callable) -> Callable:
 def _build_kwargs(**params) -> dict:
     """Return only non-None keyword arguments. Correctly handles False and 0."""
     return {k: v for k, v in params.items() if v is not None}
+
+def _guard_write(method_name: str, confirm_destructive_action: bool = False) -> str | None:
+    return guard_write_operation(method_name, READ_ONLY_MODE, confirm_destructive_action)
 
 # Create async versions of commonly used Meraki API methods
 async_get_organizations = to_async(dashboard.organizations.getOrganizations)
@@ -234,6 +245,9 @@ async def get_devices(org_id: str = None) -> str:
 @mcp.tool()
 def create_network(name: str, tags: list[str], productTypes: list[str], org_id: str = None, copyFromNetworkId: str = None) -> str:
     """Create a new network in Meraki, optionally copying from another network."""
+    blocked = _guard_write("createOrganizationNetwork")
+    if blocked:
+        return blocked
     organization_id = org_id or MERAKI_ORG_ID
     kwargs = {}
     if copyFromNetworkId:
@@ -243,8 +257,11 @@ def create_network(name: str, tags: list[str], productTypes: list[str], org_id: 
 
 # Delete network in Meraki
 @mcp.tool()
-def delete_network(network_id: str) -> str:
-    """Delete a network in Meraki"""
+def delete_network(network_id: str, confirm_destructive_action: bool = False) -> str:
+    """Delete a network in Meraki."""
+    blocked = _guard_write("deleteNetwork", confirm_destructive_action)
+    if blocked:
+        return blocked
     dashboard.networks.deleteNetwork(network_id)
     return f"Network {network_id} deleted"
 
@@ -308,6 +325,10 @@ def update_network(network_id: str, update_data: NetworkUpdateSchema) -> str:
         network_id: The ID of the network to update
         update_data: Network properties to update (name, timeZone, tags, enrollmentString, notes)
     """
+    blocked = _guard_write("updateNetwork")
+    if blocked:
+        return blocked
+
     # Convert the Pydantic model to a dictionary and filter out None values
     update_dict = update_data.model_dump(exclude_none=True)
 
@@ -366,6 +387,9 @@ async def get_client_policy(network_id: str, client_id: str) -> str:
 @mcp.tool()
 def update_client_policy(network_id: str, client_id: str, device_policy: str, group_policy_id: str = None) -> str:
     """Update policy for a client"""
+    blocked = _guard_write("updateNetworkClientPolicy")
+    if blocked:
+        return blocked
     kwargs = {'devicePolicy': device_policy}
     if group_policy_id:
         kwargs['groupPolicyId'] = group_policy_id
@@ -404,6 +428,10 @@ async def update_device(serial: str, device_settings: DeviceUpdateSchema) -> str
     Returns:
         Confirmation of the update with the new settings
     """
+    blocked = _guard_write("updateDevice")
+    if blocked:
+        return blocked
+
     # Convert the Pydantic model to a dictionary and filter out None values
     update_dict = device_settings.model_dump(exclude_none=True)
 
@@ -423,13 +451,19 @@ async def update_device(serial: str, device_settings: DeviceUpdateSchema) -> str
 @mcp.tool()
 def claim_devices(network_id: str, serials: list[str]) -> str:
     """Claim one or more devices into a Meraki network"""
+    blocked = _guard_write("claimNetworkDevices")
+    if blocked:
+        return blocked
     dashboard.networks.claimNetworkDevices(network_id, serials)
     return f"Devices {serials} claimed into network {network_id}"
 
 # Remove device from network
 @mcp.tool()
-def remove_device(network_id: str, serial: str) -> str:
+def remove_device(network_id: str, serial: str, confirm_destructive_action: bool = False) -> str:
     """Remove a device from a network"""
+    blocked = _guard_write("removeNetworkDevices", confirm_destructive_action)
+    if blocked:
+        return blocked
     dashboard.networks.removeNetworkDevices(network_id, serial)
     return f"Device {serial} removed from network {network_id}"
 
@@ -437,6 +471,9 @@ def remove_device(network_id: str, serial: str) -> str:
 @mcp.tool()
 def reboot_device(serial: str) -> str:
     """Reboot a device"""
+    blocked = _guard_write("rebootDevice")
+    if blocked:
+        return blocked
     result = dashboard.devices.rebootDevice(serial)
     return json.dumps(result, indent=2)
 
@@ -486,6 +523,10 @@ async def update_wireless_ssid(network_id: str, ssid_number: str, ssid_settings:
     Returns:
         The updated SSID configuration
     """
+    blocked = _guard_write("updateNetworkWirelessSsid")
+    if blocked:
+        return blocked
+
     # Convert the Pydantic model to a dictionary and filter out None values
     update_dict = ssid_settings.model_dump(exclude_none=True)
 
@@ -516,6 +557,9 @@ def get_switch_ports(serial: str) -> str:
 @mcp.tool()
 def update_switch_port(serial: str, port_id: str, name: str = None, tags: list[str] = None, enabled: bool = None, vlan: int = None) -> str:
     """Update a switch port"""
+    blocked = _guard_write("updateDeviceSwitchPort")
+    if blocked:
+        return blocked
     kwargs = _build_kwargs(name=name, tags=tags, enabled=enabled, vlan=vlan)
     result = dashboard.switch.updateDeviceSwitchPort(serial, port_id, **kwargs)
     return json.dumps(result, indent=2)
@@ -531,6 +575,9 @@ def get_switch_vlans(network_id: str) -> str:
 @mcp.tool()
 def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: str = None, appliance_ip: str = None) -> str:
     """Create a switch VLAN"""
+    blocked = _guard_write("createNetworkSwitchVlan")
+    if blocked:
+        return blocked
     kwargs = {}
     if subnet:
         kwargs['subnet'] = subnet
@@ -578,6 +625,10 @@ def update_firewall_rules(network_id: str, rules: List[FirewallRule]) -> str:
     Returns:
         The updated firewall rules configuration
     """
+    blocked = _guard_write("updateNetworkApplianceFirewallL3FirewallRules")
+    if blocked:
+        return blocked
+
     # Convert the list of Pydantic models to a list of dictionaries
     rules_dict = [rule.model_dump(exclude_none=True) for rule in rules]
 
@@ -618,6 +669,9 @@ def get_organization_admins(org_id: str = None) -> str:
 @mcp.tool()
 def create_organization_admin(org_id: str, email: str, name: str, org_access: str, tags: list[str] = None, networks: list[dict] = None) -> str:
     """Create a new organization admin"""
+    blocked = _guard_write("createOrganizationAdmin")
+    if blocked:
+        return blocked
     organization_id = org_id or MERAKI_ORG_ID
     kwargs = {
         'email': email,
@@ -684,6 +738,9 @@ def get_network_alerts_settings(network_id: str) -> str:
 @mcp.tool()
 def update_network_alerts_settings(network_id: str, defaultDestinations: dict = None, alerts: list[dict] = None) -> str:
     """Update network alerts settings"""
+    blocked = _guard_write("updateNetworkAlertsSettings")
+    if blocked:
+        return blocked
     kwargs = {}
     if defaultDestinations:
         kwargs['defaultDestinations'] = defaultDestinations
@@ -701,6 +758,9 @@ def update_network_alerts_settings(network_id: str, defaultDestinations: dict = 
 @mcp.tool()
 def ping_device(serial: str, target_ip: str, count: int = 5) -> str:
     """Ping a device from another device"""
+    blocked = _guard_write("createDeviceLiveToolsPing")
+    if blocked:
+        return blocked
     result = dashboard.devices.createDeviceLiveToolsPing(serial, target_ip, count=count)
     return json.dumps(result, indent=2)
 
@@ -715,6 +775,9 @@ def get_device_ping_results(serial: str, ping_id: str) -> str:
 @mcp.tool()
 def cable_test_device(serial: str, ports: list[str]) -> str:
     """Run cable test on device ports"""
+    blocked = _guard_write("createDeviceLiveToolsCableTest")
+    if blocked:
+        return blocked
     result = dashboard.devices.createDeviceLiveToolsCableTest(serial, ports)
     return json.dumps(result, indent=2)
 
@@ -729,6 +792,9 @@ def get_device_cable_test_results(serial: str, cable_test_id: str) -> str:
 @mcp.tool()
 def blink_device_leds(serial: str, duration: int = 5) -> str:
     """Blink device LEDs for identification"""
+    blocked = _guard_write("blinkDeviceLeds")
+    if blocked:
+        return blocked
     result = dashboard.devices.blinkDeviceLeds(serial, duration=duration)
     return json.dumps(result, indent=2)
 
@@ -736,6 +802,9 @@ def blink_device_leds(serial: str, duration: int = 5) -> str:
 @mcp.tool()
 def wake_on_lan_device(serial: str, mac: str) -> str:
     """Send wake-on-LAN packet to a device"""
+    blocked = _guard_write("createDeviceLiveToolsWakeOnLan")
+    if blocked:
+        return blocked
     result = dashboard.devices.createDeviceLiveToolsWakeOnLan(serial, mac)
     return json.dumps(result, indent=2)
 
@@ -754,6 +823,9 @@ def get_wireless_rf_profiles(network_id: str) -> str:
 @mcp.tool()
 def create_wireless_rf_profile(network_id: str, name: str, band_selection_type: str, **kwargs) -> str:
     """Create a wireless RF profile"""
+    blocked = _guard_write("createNetworkWirelessRfProfile")
+    if blocked:
+        return blocked
     result = dashboard.wireless.createNetworkWirelessRfProfile(network_id, name, bandSelectionType=band_selection_type, **kwargs)
     return json.dumps(result, indent=2)
 
@@ -800,6 +872,9 @@ def get_switch_port_statuses(serial: str) -> str:
 @mcp.tool()
 def cycle_switch_ports(serial: str, ports: list[str]) -> str:
     """Cycle (restart) switch ports"""
+    blocked = _guard_write("cycleDeviceSwitchPorts")
+    if blocked:
+        return blocked
     result = dashboard.switch.cycleDeviceSwitchPorts(serial, ports)
     return json.dumps(result, indent=2)
 
@@ -814,6 +889,9 @@ def get_switch_access_control_lists(network_id: str) -> str:
 @mcp.tool()
 def update_switch_access_control_lists(network_id: str, rules: list[dict]) -> str:
     """Update switch access control lists"""
+    blocked = _guard_write("updateNetworkSwitchAccessControlLists")
+    if blocked:
+        return blocked
     result = dashboard.switch.updateNetworkSwitchAccessControlLists(network_id, rules)
     return json.dumps(result, indent=2)
 
@@ -828,6 +906,9 @@ def get_switch_qos_rules(network_id: str) -> str:
 @mcp.tool()
 def create_switch_qos_rule(network_id: str, vlan: int, protocol: str, src_port: int, src_port_range: str = None, dst_port: int = None, dst_port_range: str = None, dscp: int = None) -> str:
     """Create a switch QoS rule"""
+    blocked = _guard_write("createNetworkSwitchQosRule")
+    if blocked:
+        return blocked
     kwargs = {
         'vlan': vlan,
         'protocol': protocol,
@@ -857,6 +938,9 @@ def get_appliance_vpn_site_to_site(network_id: str) -> str:
 @mcp.tool()
 def update_appliance_vpn_site_to_site(network_id: str, mode: str, hubs: list[dict] = None, subnets: list[dict] = None) -> str:
     """Update appliance VPN site-to-site configuration"""
+    blocked = _guard_write("updateNetworkApplianceVpnSiteToSiteVpn")
+    if blocked:
+        return blocked
     kwargs = {'mode': mode, **_build_kwargs(hubs=hubs, subnets=subnets)}
     result = dashboard.appliance.updateNetworkApplianceVpnSiteToSiteVpn(network_id, **kwargs)
     return json.dumps(result, indent=2)
@@ -872,6 +956,9 @@ def get_appliance_content_filtering(network_id: str) -> str:
 @mcp.tool()
 def update_appliance_content_filtering(network_id: str, allowed_urls: list[str] = None, blocked_urls: list[str] = None, blocked_url_patterns: list[str] = None, youtube_restricted_for_teenagers: bool = None, youtube_restricted_for_mature: bool = None) -> str:
     """Update appliance content filtering settings"""
+    blocked = _guard_write("updateNetworkApplianceContentFiltering")
+    if blocked:
+        return blocked
     kwargs = {}
     if allowed_urls:
         kwargs['allowedUrls'] = allowed_urls
@@ -905,6 +992,9 @@ def get_appliance_traffic_shaping(network_id: str) -> str:
 @mcp.tool()
 def update_appliance_traffic_shaping(network_id: str, global_bandwidth_limits: dict = None) -> str:
     """Update appliance traffic shaping settings"""
+    blocked = _guard_write("updateNetworkApplianceTrafficShaping")
+    if blocked:
+        return blocked
     kwargs = {}
     if global_bandwidth_limits:
         kwargs['globalBandwidthLimits'] = global_bandwidth_limits
@@ -941,6 +1031,9 @@ def get_camera_analytics_zones(serial: str) -> str:
 @mcp.tool()
 def generate_camera_snapshot(serial: str, timestamp: str = None) -> str:
     """Generate a camera snapshot"""
+    blocked = _guard_write("generateDeviceCameraSnapshot")
+    if blocked:
+        return blocked
     kwargs = {}
     if timestamp:
         kwargs['timestamp'] = timestamp
@@ -959,6 +1052,9 @@ def get_camera_sense(serial: str) -> str:
 @mcp.tool()
 def update_camera_sense(serial: str, sense_enabled: bool = None, mqtt_broker_id: str = None, audio_detection: dict = None) -> str:
     """Update camera sense configuration"""
+    blocked = _guard_write("updateDeviceCameraSense")
+    if blocked:
+        return blocked
     kwargs = {}
     if sense_enabled is not None:
         kwargs['senseEnabled'] = sense_enabled
@@ -978,6 +1074,9 @@ def update_camera_sense(serial: str, sense_enabled: bool = None, mqtt_broker_id:
 @mcp.tool()
 def create_action_batch(org_id: str, actions: list[dict], confirmed: bool = True, synchronous: bool = False) -> str:
     """Create an action batch for bulk operations"""
+    blocked = _guard_write("createOrganizationActionBatch")
+    if blocked:
+        return blocked
     organization_id = org_id or MERAKI_ORG_ID
     result = dashboard.organizations.createOrganizationActionBatch(organization_id, actions, confirmed=confirmed, synchronous=synchronous)
     return json.dumps(result, indent=2)

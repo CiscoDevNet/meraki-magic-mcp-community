@@ -79,14 +79,19 @@ Edit `.env` with your Meraki credentials:
 ```env
 MERAKI_API_KEY="your_api_key_here"
 MERAKI_ORG_ID="your_org_id_here"
+MERAKI_BASE_URL="https://api.meraki.com/api/v1"
 
 # Optional: Performance tuning
 ENABLE_CACHING=true
 CACHE_TTL_SECONDS=300
-READ_ONLY_MODE=false
+READ_ONLY_MODE=true
 ```
 
 Get your API key from: **Meraki Dashboard → Organization → Settings → Dashboard API access**
+
+`READ_ONLY_MODE` defaults to `true` to block create/update/delete/remove operations. Set `READ_ONLY_MODE=false` only when you intend to make changes. Delete/remove calls also require `confirm_destructive_action=true`.
+
+Use `MERAKI_BASE_URL` to point the MCP server at another Meraki region or compatible Dashboard API base URI.
 
 ## Deployment Options
 
@@ -256,6 +261,7 @@ The Dynamic MCP provides two ways to access Meraki APIs:
 2. **Generic API caller** (`call_meraki_api`):
    - Access ALL 804+ Meraki API methods
    - Example: `call_meraki_api(section="appliance", method="getNetworkApplianceFirewallL3FirewallRules", parameters={"networkId": "L_123"})`
+   - Destructive methods require `confirm_destructive_action=true` in `parameters`
 
 ## Example Usage
 
@@ -328,7 +334,7 @@ This guide provides a comprehensive overview of the curated network tools availa
 ### Network Management
 - **`get_networks(org_id)`** - Get a list of networks from Meraki
 - **`create_network(name, tags, productTypes, org_id, copyFromNetworkId)`** - Create a new network
-- **`delete_network(network_id)`** - Delete a network in Meraki
+- **`delete_network(network_id, confirm_destructive_action)`** - Delete a network in Meraki
 - **`get_network_details(network_id)`** - Get details for a specific network
 - **`update_network(network_id, update_data)`** - Update a network's properties
 
@@ -367,7 +373,7 @@ This guide provides a comprehensive overview of the curated network tools availa
 ### Device Operations
 - **`update_device(serial, device_settings)`** - Update a device in the Meraki organization
 - **`claim_devices(network_id, serials)`** - Claim one or more devices into a Meraki network
-- **`remove_device(serial)`** - Remove a device from its network
+- **`remove_device(network_id, serial, confirm_destructive_action)`** - Remove a device from its network
 - **`reboot_device(serial)`** - Reboot a device
 
 ### Device Monitoring

@@ -58,11 +58,12 @@ cache_clear
 
 **Problem:** Easy to accidentally run destructive operations while exploring.
 
-**Solution:** Optional read-only mode that blocks all write operations.
+**Solution:** Read-only mode is enabled by default and blocks all write operations.
 
 ### How It Works:
 - Detects write operations (create, update, delete, remove, reboot, etc.)
 - If `READ_ONLY_MODE=true`, blocks write operations with clear error
+- If `READ_ONLY_MODE=false`, destructive `delete*` and `remove*` operations still require `confirm_destructive_action=true`
 - Read operations work normally
 - Can be toggled anytime via .env file
 
@@ -75,8 +76,8 @@ cache_clear
 ### Configuration:
 ```bash
 # In .env file
-READ_ONLY_MODE=false   # Default: allow all operations
-READ_ONLY_MODE=true    # Block write operations
+READ_ONLY_MODE=true    # Default: block write operations
+READ_ONLY_MODE=false   # Allow write operations
 ```
 
 ### Example:
@@ -87,9 +88,16 @@ Response: [networks data] ✅ Works
 
 You: "Delete network L_12345"
 Response: {
-  "error": "Write operation blocked - READ_ONLY_MODE is enabled",
-  "hint": "Set READ_ONLY_MODE=false in .env to enable write operations"
+	  "error": "Write operation blocked - READ_ONLY_MODE is enabled",
+	  "hint": "Set READ_ONLY_MODE=false in .env to enable write operations"
 } ❌ Blocked
+
+# With READ_ONLY_MODE=false, delete/remove still need confirmation
+call_meraki_api(
+  section="networks",
+  method="deleteNetwork",
+  parameters={"networkId": "L_12345", "confirm_destructive_action": true}
+)
 ```
 
 ## 3. Enhanced Error Handling
@@ -102,6 +110,7 @@ Response: {
 ```python
 dashboard = meraki.DashboardAPI(
     api_key=MERAKI_API_KEY,
+    base_url=MERAKI_BASE_URL,
     suppress_logging=True,
     maximum_retries=3,           # Auto-retry failed requests
     wait_on_rate_limit=True      # Auto-wait when rate limited
@@ -445,7 +454,7 @@ READ_ONLY_MODE=true    # Safe exploration
 ```bash
 ENABLE_CACHING=true
 CACHE_TTL_SECONDS=60   # Shorter for fresher data
-READ_ONLY_MODE=false
+READ_ONLY_MODE=true
 ```
 
 ### Production Changes:
@@ -465,9 +474,9 @@ READ_ONLY_MODE=true
 ## Backward Compatibility
 
 All optimizations are:
-- ✅ **Opt-in** via configuration
-- ✅ **Backward compatible** (defaults match old behavior)
-- ✅ **Non-breaking** (existing workflows unchanged)
+- ✅ **Configurable** via environment variables
+- ✅ **Safer by default** (writes require `READ_ONLY_MODE=false`)
+- ✅ **Compatible with existing write workflows after setting `READ_ONLY_MODE=false`**
 - ✅ **Configurable** (adjust to your needs)
 
 ## Testing the Optimizations

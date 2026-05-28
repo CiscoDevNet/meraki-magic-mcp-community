@@ -112,6 +112,7 @@ vim .env
 ```env
 MERAKI_API_KEY="your_actual_api_key_here"
 MERAKI_ORG_ID="your_org_id_here"
+MERAKI_BASE_URL="https://api.meraki.com/api/v1"
 
 # Optional: Enable/disable caching (default: true)
 ENABLE_CACHING=true
@@ -119,9 +120,11 @@ ENABLE_CACHING=true
 # Optional: Cache TTL in seconds (default: 300 = 5 minutes)
 CACHE_TTL_SECONDS=300
 
-# Optional: Read-only mode (default: false)
-READ_ONLY_MODE=false
+# Optional: Read-only mode (default: true)
+READ_ONLY_MODE=true
 ```
+
+`READ_ONLY_MODE` defaults to `true`. Set it to `false` only when you intend to make changes. Delete/remove calls also require `confirm_destructive_action=true`.
 
 **Save and exit:**
 - nano: `Ctrl + X`, then `Y`, then `Enter`
@@ -228,12 +231,15 @@ notepad .env
 ```env
 MERAKI_API_KEY="your_actual_api_key_here"
 MERAKI_ORG_ID="your_org_id_here"
+MERAKI_BASE_URL="https://api.meraki.com/api/v1"
 
 # Optional settings
 ENABLE_CACHING=true
 CACHE_TTL_SECONDS=300
-READ_ONLY_MODE=false
+READ_ONLY_MODE=true
 ```
+
+`MERAKI_BASE_URL` can be changed for regional Meraki Dashboard API deployments.
 
 **Save:** `Ctrl + S`
 **Close:** `Alt + F4` or click X
@@ -478,6 +484,8 @@ Environment variables can be set in `.env`, `docker-compose.yml`, or passed via 
 | `MCP_SERVER` | `dynamic` | Server file: `dynamic` (804+ endpoints) or `manual` (curated tools) |
 | `MERAKI_API_KEY` | *(required)* | Your Meraki Dashboard API key |
 | `MERAKI_ORG_ID` | *(optional)* | Default organization ID |
+| `MERAKI_BASE_URL` | `https://api.meraki.com/api/v1` | Dashboard API base URI for regional deployments |
+| `READ_ONLY_MODE` | `true` | Blocks write operations unless explicitly set to `false` |
 
 ### Docker Commands
 

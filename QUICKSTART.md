@@ -162,6 +162,8 @@ Example:
 
 ## Safety Tips
 
+The server defaults to `READ_ONLY_MODE=true`, so write operations are blocked until you explicitly set `READ_ONLY_MODE=false` in `.env`.
+
 ### ✅ Safe Operations (Read-Only)
 - Anything with `get` in the name
 - `list_available_tools`
@@ -177,6 +179,8 @@ Example:
 - Anything with `delete` in the name
 - Anything with `remove` in the name
 - Network/device claiming operations
+
+Delete/remove calls also require `confirm_destructive_action=true` after read-only mode has been disabled.
 
 ## Common Use Cases
 
