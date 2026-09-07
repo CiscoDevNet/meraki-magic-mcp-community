@@ -11,11 +11,7 @@ This script does NOT make any API calls - it only inspects the SDK structure
 import os
 import meraki
 import inspect
-from dotenv import load_dotenv
 from meraki_mcp_config import get_meraki_base_url
-
-# Load environment variables
-load_dotenv()
 
 # Initialize SDK (with dummy key for inspection - won't make calls)
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY", "dummy_key")

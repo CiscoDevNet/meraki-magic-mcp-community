@@ -113,9 +113,6 @@ def fake_runtime_modules():
     fake_meraki = types.ModuleType("meraki")
     fake_meraki.DashboardAPI = FakeDashboardAPI
 
-    fake_dotenv = types.ModuleType("dotenv")
-    fake_dotenv.load_dotenv = lambda *args, **kwargs: None
-
     fake_mcp = types.ModuleType("mcp")
     fake_mcp_server = types.ModuleType("mcp.server")
     fake_fastmcp = types.ModuleType("mcp.server.fastmcp")
@@ -127,7 +124,6 @@ def fake_runtime_modules():
 
     module_overrides = {
         "meraki": fake_meraki,
-        "dotenv": fake_dotenv,
         "mcp": fake_mcp,
         "mcp.server": fake_mcp_server,
         "mcp.server.fastmcp": fake_fastmcp,

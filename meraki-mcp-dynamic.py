@@ -13,10 +13,9 @@ import hashlib
 import threading
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
+from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
-from dotenv import load_dotenv
-from pathlib import Path
 from meraki_mcp_config import (
     CONFIRM_DESTRUCTIVE_ACTION_PARAM,
     get_meraki_base_url,
@@ -26,9 +25,6 @@ from meraki_mcp_config import (
     is_write_operation,
     pop_destructive_confirmation,
 )
-
-# Load environment variables from .env file
-load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # Transport configuration
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio").lower()
@@ -44,7 +40,10 @@ MERAKI_ORG_ID = os.getenv("MERAKI_ORG_ID")
 MERAKI_BASE_URL = get_meraki_base_url()
 
 if not MERAKI_API_KEY:
-    print("FATAL: MERAKI_API_KEY is not set. Add it to .env or the environment.", file=sys.stderr)
+    print(
+        "FATAL: MERAKI_API_KEY is not set. Set it in the MCP client env block or the process environment.",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"

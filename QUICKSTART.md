@@ -48,7 +48,13 @@ Edit your Claude Desktop config file:
         "run",
         "-t", "stdio",
         "/path/to/meraki-magic-mcp-community/meraki-mcp-dynamic.py"
-      ]
+      ],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "READ_ONLY_MODE": "true"
+      }
     }
   }
 }
@@ -64,7 +70,12 @@ Edit your Claude Desktop config file:
         "run",
         "-t", "stdio",
         "/path/to/meraki-magic-mcp-community/meraki-mcp.py"
-      ]
+      ],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "READ_ONLY_MODE": "true"
+      }
     },
     "Meraki_Full_API": {
       "command": "/path/to/meraki-magic-mcp-community/.venv/bin/fastmcp",
@@ -72,7 +83,12 @@ Edit your Claude Desktop config file:
         "run",
         "-t", "stdio",
         "/path/to/meraki-magic-mcp-community/meraki-mcp-dynamic.py"
-      ]
+      ],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "READ_ONLY_MODE": "true"
+      }
     }
   }
 }
@@ -145,7 +161,7 @@ Examples:
 
 ## Auto-Organization ID
 
-If you don't provide `organizationId` to a tool that needs it, the MCP will automatically use your `MERAKI_ORG_ID` from `.env`.
+If you don't provide `organizationId` to a tool that needs it, the MCP will automatically use your `MERAKI_ORG_ID` from the process environment.
 
 ## Discovery Workflow
 
@@ -162,7 +178,7 @@ Example:
 
 ## Safety Tips
 
-The server defaults to `READ_ONLY_MODE=true`, so write operations are blocked until you explicitly set `READ_ONLY_MODE=false` in `.env`.
+The server defaults to `READ_ONLY_MODE=true`, so write operations are blocked until you explicitly set `READ_ONLY_MODE=false` in the MCP client `env` or process environment.
 
 ### ✅ Safe Operations (Read-Only)
 - Anything with `get` in the name

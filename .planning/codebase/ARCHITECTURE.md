@@ -16,8 +16,8 @@
 **Bootstrap And Runtime Layer:**
 - Purpose: Load environment, select transport, create the `FastMCP` server, initialize the Meraki SDK client, and expose an ASGI app when HTTP mode is enabled.
 - Location: `meraki-mcp.py`, `meraki-mcp-dynamic.py`
-- Contains: `load_dotenv(...)`, `MCP_TRANSPORT`/`MCP_HOST`/`MCP_PORT` parsing, `FastMCP(...)`, `meraki.DashboardAPI(...)`, `app = mcp.streamable_http_app()`, `mcp.run(...)`
-- Depends on: `python-dotenv`, `mcp.server.fastmcp.FastMCP`, `meraki.DashboardAPI`
+- Contains: `MCP_TRANSPORT`/`MCP_HOST`/`MCP_PORT` parsing, `FastMCP(...)`, `meraki.DashboardAPI(...)`, `app = mcp.streamable_http_app()`, `mcp.run(...)`
+- Depends on: `mcp.server.fastmcp.FastMCP`, `meraki.DashboardAPI`
 - Used by: Claude Desktop `stdio` runs, HTTP deployments, Docker entrypoint selection in `entrypoint.sh`
 
 **Curated Tool Layer:**
@@ -142,7 +142,7 @@
 
 **Validation:** Use Pydantic models in `meraki-mcp.py` for curated writes; use `inspect.signature(...)` and runtime parameter checking in `meraki-mcp-dynamic.py` for generic access.
 
-**Authentication:** Read `MERAKI_API_KEY` and optional `MERAKI_ORG_ID` from environment or `.env`; pass the API key into the `dashboard` client in both server scripts.
+**Authentication:** Read `MERAKI_API_KEY` and optional `MERAKI_ORG_ID` from the process environment; pass the API key into the `dashboard` client in both server scripts.
 
 **Runtime Modes:** Support `stdio` by default and HTTP through `MCP_TRANSPORT=http`, which is normalized to `streamable-http` in both `meraki-mcp.py` and `meraki-mcp-dynamic.py`. Keep container deployments HTTP-first through `Dockerfile` and `docker-compose.yml`.
 

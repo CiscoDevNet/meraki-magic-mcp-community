@@ -92,43 +92,27 @@ pip install -r requirements.txt
 
 **Expected output:**
 ```
-Successfully installed meraki-X.X.X fastmcp-X.X.X python-dotenv-X.X.X ...
+Successfully installed meraki-X.X.X fastmcp-X.X.X ...
 ```
 
-### Step 6: Configure Environment Variables
+### Step 6: Prepare Environment Variables
+
+Do not create a project `.env` file. The MCP server reads credentials from the process environment.
+
+For Claude Desktop / Cursor (stdio), add them in the client config `env` block in [Claude Desktop Setup](#claude-desktop-setup).
+
+For CLI, HTTP, or Docker, export them in your shell:
+
 ```bash
-# Copy example file
-cp .env-example .env
-
-# Edit with your preferred editor
-nano .env
-# OR
-open -e .env
-# OR
-vim .env
+export MERAKI_API_KEY="your_actual_api_key_here"
+export MERAKI_ORG_ID="your_org_id_here"
+export MERAKI_BASE_URL="https://api.meraki.com/api/v1"
+export READ_ONLY_MODE=true
 ```
 
-**Add your credentials:**
-```env
-MERAKI_API_KEY="your_actual_api_key_here"
-MERAKI_ORG_ID="your_org_id_here"
-MERAKI_BASE_URL="https://api.meraki.com/api/v1"
-
-# Optional: Enable/disable caching (default: true)
-ENABLE_CACHING=true
-
-# Optional: Cache TTL in seconds (default: 300 = 5 minutes)
-CACHE_TTL_SECONDS=300
-
-# Optional: Read-only mode (default: true)
-READ_ONLY_MODE=true
-```
+Optional tuning: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`.
 
 `READ_ONLY_MODE` defaults to `true`. Set it to `false` only when you intend to make changes. Delete/remove calls also require `confirm_destructive_action=true`.
-
-**Save and exit:**
-- nano: `Ctrl + X`, then `Y`, then `Enter`
-- vim: Press `Esc`, type `:wq`, press `Enter`
 
 ### Step 7: Get Absolute Path for Claude Config
 ```bash
@@ -215,34 +199,36 @@ pip install -r requirements.txt
 
 **Expected output:**
 ```
-Successfully installed meraki-X.X.X fastmcp-X.X.X python-dotenv-X.X.X ...
+Successfully installed meraki-X.X.X fastmcp-X.X.X ...
 ```
 
-### Step 7: Configure Environment Variables
+### Step 7: Prepare Environment Variables
+
+Do not create a project `.env` file. The MCP server reads credentials from the process environment.
+
+For Claude Desktop / Cursor (stdio), add them in the client config `env` block in [Claude Desktop Setup](#claude-desktop-setup).
+
+For CLI, HTTP, or Docker, set them in your shell:
+
+**Command Prompt:**
 ```cmd
-# Copy example file
-copy .env-example .env
-
-# Edit with Notepad
-notepad .env
+set MERAKI_API_KEY=your_actual_api_key_here
+set MERAKI_ORG_ID=your_org_id_here
+set MERAKI_BASE_URL=https://api.meraki.com/api/v1
+set READ_ONLY_MODE=true
 ```
 
-**Add your credentials:**
-```env
-MERAKI_API_KEY="your_actual_api_key_here"
-MERAKI_ORG_ID="your_org_id_here"
-MERAKI_BASE_URL="https://api.meraki.com/api/v1"
-
-# Optional settings
-ENABLE_CACHING=true
-CACHE_TTL_SECONDS=300
-READ_ONLY_MODE=true
+**PowerShell:**
+```powershell
+$env:MERAKI_API_KEY="your_actual_api_key_here"
+$env:MERAKI_ORG_ID="your_org_id_here"
+$env:MERAKI_BASE_URL="https://api.meraki.com/api/v1"
+$env:READ_ONLY_MODE="true"
 ```
+
+Optional settings: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `READ_ONLY_MODE`.
 
 `MERAKI_BASE_URL` can be changed for regional Meraki Dashboard API deployments.
-
-**Save:** `Ctrl + S`
-**Close:** `Alt + F4` or click X
 
 ### Step 8: Get Absolute Path for Claude Config
 
@@ -274,13 +260,13 @@ pwd
 3. Click **Enable API access** (if not already enabled)
 4. Click **Generate new API key**
 5. **Copy the key** (you won't be able to see it again!)
-6. Paste into `.env` file
+6. Paste into the MCP client `env` block (see [Claude Desktop Setup](#claude-desktop-setup))
 
 #### Organization ID:
 1. In Meraki Dashboard, go to **Organization → Settings**
 2. Look for **Organization ID** near the top
 3. Copy the ID (format: `123456` or similar)
-4. Paste into `.env` file
+4. Paste into the MCP client `env` block (see [Claude Desktop Setup](#claude-desktop-setup))
 
 ---
 
@@ -320,7 +306,13 @@ Config file: `claude_desktop_config.json`
         "run",
         "-t", "stdio",
         "/Users/yourname/meraki-magic-mcp-community/meraki-mcp-dynamic.py"
-      ]
+      ],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "READ_ONLY_MODE": "true"
+      }
     }
   }
 }
@@ -336,7 +328,13 @@ Config file: `claude_desktop_config.json`
         "run",
         "-t", "stdio",
         "C:/Users/YourName/meraki-magic-mcp-community/meraki-mcp-dynamic.py"
-      ]
+      ],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "READ_ONLY_MODE": "true"
+      }
     }
   }
 }
@@ -374,13 +372,14 @@ By default, the MCP server uses **stdio** transport for direct local connections
 
 ### Running in HTTP Mode (Local)
 
-**Step 1: Configure `.env`**
+**Step 1: Export environment variables**
 
-Add or update these settings in your `.env` file:
-```env
-MCP_TRANSPORT=http
-MCP_HOST=127.0.0.1
-MCP_PORT=8000
+```bash
+export MERAKI_API_KEY="your_api_key_here"
+export MERAKI_ORG_ID="your_org_id_here"
+export MCP_TRANSPORT=http
+export MCP_HOST=127.0.0.1
+export MCP_PORT=8000
 ```
 
 **Step 2: Start the server**
@@ -418,10 +417,10 @@ Restart Claude Desktop after updating the config.
 
 To accept connections from other machines, bind to all interfaces:
 
-```env
-MCP_TRANSPORT=http
-MCP_HOST=0.0.0.0
-MCP_PORT=8000
+```bash
+export MCP_TRANSPORT=http
+export MCP_HOST=0.0.0.0
+export MCP_PORT=8000
 ```
 
 Remote clients connect via `http://<server-ip>:8000/mcp`.
@@ -437,11 +436,13 @@ Docker provides the simplest way to deploy the MCP server remotely.
 
 ### Quick Start
 
-**Step 1: Create `.env` file with your credentials**
+**Step 1: Export your credentials**
 ```bash
-cp .env-example .env
-# Edit .env with your MERAKI_API_KEY and MERAKI_ORG_ID
+export MERAKI_API_KEY="your_api_key_here"
+export MERAKI_ORG_ID="your_org_id_here"
 ```
+
+Do not keep credentials in a project `.env` file. Compose interpolates `MERAKI_API_KEY` from the host environment (a leftover `.env` in the project directory is Compose's default interpolation source, not used by the Python server).
 
 **Step 2: Build and run**
 ```bash
@@ -474,7 +475,7 @@ You should see a JSON response with `serverInfo.name` = "Meraki Magic MCP - Full
 
 ### Docker Configuration
 
-Environment variables can be set in `.env`, `docker-compose.yml`, or passed via `docker run -e`:
+Environment variables can be exported in the host shell (used by `docker compose`) or passed via `docker run -e`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -611,23 +612,27 @@ pip install -r requirements.txt
 1. **Regenerate API key:**
    - Go to Meraki Dashboard → Organization → Settings → Dashboard API access
    - Generate new key
-   - Update `.env` file
+   - Update `MERAKI_API_KEY` in the MCP client `env` block (stdio) or re-export it in your shell (CLI/Docker)
 
-2. **Check .env file:**
+2. **Check the process environment:**
    ```bash
    # macOS/Linux:
-   cat .env | grep MERAKI_API_KEY
+   echo "$MERAKI_API_KEY"
 
-   # Windows:
-   type .env | findstr MERAKI_API_KEY
+   # Windows (Command Prompt):
+   echo %MERAKI_API_KEY%
+
+   # Windows (PowerShell):
+   echo $env:MERAKI_API_KEY
    ```
 
-3. **Verify no extra spaces or quotes:**
-   ```env
-   MERAKI_API_KEY="abc123"  ✅ Correct
-   MERAKI_API_KEY= "abc123" ❌ Extra space
-   MERAKI_API_KEY='abc123'  ❌ Wrong quotes
+   For Claude Desktop / Cursor, confirm `MERAKI_API_KEY` is set in the client config `env` object.
+
+3. **Verify no extra spaces in the client `env` value:**
+   ```json
+   "MERAKI_API_KEY": "abc123"
    ```
+   Avoid leading/trailing spaces in the JSON string.
 
 ### Issue: Python version too old
 
@@ -676,14 +681,14 @@ Then try activating virtual environment again.
 2. **Verify API key has proper permissions**
 
 3. **Enable rate limit handling** (already enabled by default):
-   ```env
-   # In .env - already set by default
+   ```bash
+   # Already the default; set in MCP client env or process environment if needed
    ENABLE_CACHING=true
    ```
 
 4. **Increase cache TTL to reduce API calls:**
-   ```env
-   CACHE_TTL_SECONDS=600  # 10 minutes instead of 5
+   ```bash
+   export CACHE_TTL_SECONDS=600  # 10 minutes instead of 5
    ```
 
 ### Issue: Hitting conversation length limits in Claude
@@ -719,9 +724,9 @@ dir
 
 ### Enable Debug Output
 
-Add to `.env`:
-```env
-DEBUG=true
+Add `DEBUG=true` to the MCP client `env` block (or export it in the process environment):
+```json
+"DEBUG": "true"
 ```
 
 Restart Claude Desktop and check logs for detailed output.

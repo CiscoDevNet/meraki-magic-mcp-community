@@ -40,7 +40,7 @@
 
 **Order:**
 1. Standard library imports appear first in `meraki-mcp.py`, `meraki-mcp-dynamic.py`, and `inspect_tools.py`, including `os`, `sys`, `json`, `asyncio`, `functools`, `inspect`, `hashlib`, and `threading`.
-2. Third-party imports follow, including `meraki`, `pydantic`, `mcp.server.fastmcp.FastMCP`, and `dotenv.load_dotenv`.
+2. Third-party imports follow, including `meraki`, `pydantic`, and `mcp.server.fastmcp.FastMCP`.
 3. There are no local package imports because the repository is a flat script layout without a `src/` package.
 
 **Path Aliases:**
@@ -104,13 +104,13 @@
 ## Environment & Config
 
 **Environment Loading:**
-- Both server entrypoints call `load_dotenv(Path(__file__).resolve().parent / ".env")` at import time in `meraki-mcp.py` and `meraki-mcp-dynamic.py`.
-- `inspect_tools.py` uses plain `load_dotenv()` and falls back to `MERAKI_API_KEY="dummy_key"` so offline SDK inspection works without real credentials.
-- `.env-example` is the source of truth for supported variables such as `MERAKI_API_KEY`, `MERAKI_ORG_ID`, `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `READ_ONLY_MODE`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`, `MCP_TRANSPORT`, `MCP_HOST`, and `MCP_PORT`.
+- Both server entrypoints read configuration with `os.getenv(...)` at import time in `meraki-mcp.py` and `meraki-mcp-dynamic.py`. They do not load a project `.env` file.
+- `inspect_tools.py` falls back to `MERAKI_API_KEY="dummy_key"` so offline SDK inspection works without real credentials.
+- Supported variables include `MERAKI_API_KEY`, `MERAKI_ORG_ID`, `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `READ_ONLY_MODE`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`, `MCP_TRANSPORT`, `MCP_HOST`, and `MCP_PORT`.
 
 **Secrets Handling:**
-- `.gitignore` excludes `.env`, `.venv/`, and `.meraki_cache/`, so local credentials and cached API output stay out of version control.
-- `AGENTS.md` explicitly says real credentials must not be committed and `.env` is the secret-bearing file for local development.
+- `.gitignore` excludes `.env`, `.venv/`, and `.meraki_cache/`, so leftover credential files and cached API output stay out of version control.
+- `AGENTS.md` explicitly says real credentials must not be committed. Pass secrets through the MCP client `env` block or the process environment.
 
 **Configuration Pattern:**
 - Keep new runtime switches as uppercase environment variables with string defaults at module import time, matching `meraki-mcp.py` and `meraki-mcp-dynamic.py`.
@@ -119,7 +119,7 @@
 ## Developer Workflow
 
 **Setup:**
-- The documented local workflow is: create `.venv`, activate it, upgrade `pip`, install `requirements.txt`, and copy `.env-example` to `.env`, as described in `AGENTS.md` and `INSTALL.md`.
+- The documented local workflow is: create `.venv`, activate it, upgrade `pip`, install `requirements.txt`, and set `MERAKI_API_KEY` in the MCP client `env` or process environment, as described in `AGENTS.md` and `INSTALL.md`.
 - Python 3.13+ is required in `AGENTS.md`, `INSTALL.md`, `.python-version`, and `pyproject.toml`.
 
 **Run Modes:**

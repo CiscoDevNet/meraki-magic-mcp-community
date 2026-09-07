@@ -37,7 +37,7 @@
 - `pytest` 7.4.4 is present in `requirements.txt`, but no `tests/` directory, `pytest.ini`, or committed test suite was detected in the repository root.
 
 **Build/Dev:**
-- `python-dotenv` 1.1.0 in `requirements.txt` - `.env` loading is performed in `meraki-mcp.py`, `meraki-mcp-dynamic.py`, and `inspect_tools.py`.
+- `python-dotenv` remains in the pinned `requirements.txt` freeze as a transitive dependency (`pydantic-settings`); the MCP servers do not import it.
 - Docker - image build is defined in `Dockerfile`, and local container orchestration is defined in `docker-compose.yml`.
 - `uvicorn` 0.41.0 in `requirements.txt` - available for external ASGI hosting; both server modules expose `app = mcp.streamable_http_app()` for that use in `meraki-mcp.py` and `meraki-mcp-dynamic.py`.
 
@@ -50,7 +50,7 @@
 - `pydantic==2.12.5` in `requirements.txt` - validates complex tool inputs like SSID, firewall, and action-batch payloads in `meraki-mcp.py`.
 
 **Infrastructure:**
-- `python-dotenv==1.1.0` in `requirements.txt` - loads local environment configuration from the repo-root `.env`.
+- `python-dotenv` in `requirements.txt` - transitive dependency of `pydantic-settings`; not used by the MCP servers.
 - `uvicorn==0.41.0` in `requirements.txt` - optional ASGI serving for the exported `app` object.
 - `requests==2.32.3` and transitive HTTP stack packages in `requirements.txt` - HTTP transport for the Meraki SDK.
 - `sse-starlette==2.3.4`, `starlette==0.46.2`, and `websockets==15.0.1` in `requirements.txt` - support MCP HTTP/SSE serving through the FastMCP stack.
@@ -58,11 +58,11 @@
 ## Configuration
 
 **Environment:**
-- Local configuration is loaded from the repo-root `.env` by `meraki-mcp.py`, `meraki-mcp-dynamic.py`, and `inspect_tools.py`. The committed shape is documented in `.env-example`; the real `.env` file exists and is ignored by `.gitignore`.
+- Local configuration is read from the process environment with `os.getenv(...)` in `meraki-mcp.py`, `meraki-mcp-dynamic.py`, and `inspect_tools.py`. For stdio MCP, clients inject vars via the config `env` block; for CLI/Docker, export them or pass `-e`.
 - Required config:
   - `MERAKI_API_KEY` - required by both server variants before `meraki.DashboardAPI(...)` is created.
   - `MERAKI_ORG_ID` - optional default organization ID used when tools omit an org identifier.
-- Runtime config exposed in `.env-example` and consumed in `meraki-mcp-dynamic.py`:
+- Runtime config consumed in `meraki-mcp-dynamic.py`:
   - `ENABLE_CACHING`
   - `CACHE_TTL_SECONDS`
   - `READ_ONLY_MODE`
@@ -77,8 +77,8 @@
   - `MCP_SERVER` in `docker-compose.yml`, `Dockerfile`, and `entrypoint.sh` switches between `meraki-mcp-dynamic.py` and `meraki-mcp.py`.
 
 **Build:**
-- `Dockerfile` builds a Python 3.13 slim image, installs `requirements.txt`, copies the two server files plus `.env-example`, and sets HTTP-friendly defaults.
-- `docker-compose.yml` binds port `8000`, mounts the named volume `meraki-cache`, reads secrets from `.env`, and defaults to the dynamic server.
+- `Dockerfile` builds a Python 3.13 slim image, installs `requirements.txt`, copies the server files, and sets HTTP-friendly defaults.
+- `docker-compose.yml` binds port `8000`, mounts the named volume `meraki-cache`, interpolates secrets from the host environment, and defaults to the dynamic server.
 - `pyproject.toml` provides project metadata but is not sufficient alone to reproduce the fully pinned environment in `requirements.txt`.
 
 ## Platform Requirements
