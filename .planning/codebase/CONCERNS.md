@@ -45,14 +45,14 @@
 ## Security Considerations
 
 **Unauthenticated remote control plane for a write-capable admin API:**
-- Risk: Both server files expose HTTP/SSE transports through `FastMCP` and `mcp.streamable_http_app()` without any authentication, authorization, or TLS enforcement. `docker-compose.yml` publishes port `8000`, `Dockerfile` defaults to HTTP mode, and `.env-example` defaults `READ_ONLY_MODE=false`. The manual server has no read-only gate at all.
-- Files: `meraki-mcp.py`, `meraki-mcp-dynamic.py`, `Dockerfile`, `docker-compose.yml`, `.env-example`
+- Risk: Both server files expose HTTP/SSE transports through `FastMCP` and `mcp.streamable_http_app()` without any authentication, authorization, or TLS enforcement. `docker-compose.yml` publishes port `8000`, `Dockerfile` defaults to HTTP mode, and `READ_ONLY_MODE` defaults to `true` in code. The manual server has no read-only gate at all.
+- Files: `meraki-mcp.py`, `meraki-mcp-dynamic.py`, `Dockerfile`, `docker-compose.yml`
 - Current mitigation: None in code beyond optional loopback binding and optional `READ_ONLY_MODE` in `meraki-mcp-dynamic.py`.
 - Recommendations: Default to loopback and read-only mode, require auth in front of HTTP mode, terminate TLS at a reverse proxy, and add explicit warnings that the manual server is always write-capable.
 
 **Sensitive Meraki data is cached to disk and re-exposed via MCP:**
 - Risk: Large dynamic responses are written as JSON files containing request parameters and full response payloads. The server then exposes absolute cache paths and retrieval tools over MCP.
-- Files: `meraki-mcp-dynamic.py`, `.env-example`, `Dockerfile`, `docker-compose.yml`
+- Files: `meraki-mcp-dynamic.py`, `Dockerfile`, `docker-compose.yml`
 - Current mitigation: `_validate_cache_filepath(...)` prevents path traversal outside `RESPONSE_CACHE_DIR`.
 - Recommendations: Disable file caching by default for shared deployments, avoid returning absolute paths, add file permission hardening and retention limits, and treat cached responses as sensitive data equal to API output.
 

@@ -11,16 +11,11 @@ import functools
 from typing import Dict, List, Optional, Any, TypedDict, Union, Callable
 from pydantic import BaseModel, Field
 from mcp.server.fastmcp import FastMCP
-from dotenv import load_dotenv
-from pathlib import Path
 from meraki_mcp_config import (
     get_meraki_base_url,
     get_read_only_mode,
     guard_write_operation,
 )
-
-# Load environment variables from .env file
-load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # Transport configuration
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio").lower()
@@ -37,7 +32,10 @@ MERAKI_BASE_URL = get_meraki_base_url()
 READ_ONLY_MODE = get_read_only_mode()
 
 if not MERAKI_API_KEY:
-    print("FATAL: MERAKI_API_KEY is not set. Add it to .env or the environment.", file=sys.stderr)
+    print(
+        "FATAL: MERAKI_API_KEY is not set. Set it in the MCP client env block or the process environment.",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 # Initialize Meraki API client using Meraki SDK

@@ -64,7 +64,6 @@
 **Configuration:**
 - `pyproject.toml`: Python version requirement and primary dependencies
 - `requirements.txt`: Locked dependency versions used by install and container build
-- `.env-example`: Environment variable template for local and container setup
 - `docker-compose.yml`: Runtime environment wiring for containerized HTTP mode
 - `Dockerfile`: Build-time defaults, exposed port, and default `MCP_SERVER=dynamic`
 

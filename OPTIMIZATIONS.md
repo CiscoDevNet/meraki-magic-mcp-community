@@ -25,7 +25,7 @@ The dynamic MCP (`meraki-mcp-dynamic.py`) now includes several performance and s
 
 ### Configuration:
 ```bash
-# In .env file
+# In MCP client env or process environment
 ENABLE_CACHING=true          # Enable/disable caching
 CACHE_TTL_SECONDS=300        # 5 minutes (adjust as needed)
 ```
@@ -65,7 +65,7 @@ cache_clear
 - If `READ_ONLY_MODE=true`, blocks write operations with clear error
 - If `READ_ONLY_MODE=false`, destructive `delete*` and `remove*` operations still require `confirm_destructive_action=true`
 - Read operations work normally
-- Can be toggled anytime via .env file
+- Can be toggled anytime via the MCP client `env` or process environment
 
 ### Benefits:
 - ✅ Safe exploration of production environments
@@ -75,7 +75,7 @@ cache_clear
 
 ### Configuration:
 ```bash
-# In .env file
+# In MCP client env or process environment
 READ_ONLY_MODE=true    # Default: block write operations
 READ_ONLY_MODE=false   # Allow write operations
 ```
@@ -89,7 +89,7 @@ Response: [networks data] ✅ Works
 You: "Delete network L_12345"
 Response: {
 	  "error": "Write operation blocked - READ_ONLY_MODE is enabled",
-	  "hint": "Set READ_ONLY_MODE=false in .env to enable write operations"
+	  "hint": "Set READ_ONLY_MODE=false in the MCP client env or process environment"
 } ❌ Blocked
 
 # With READ_ONLY_MODE=false, delete/remove still need confirmation
@@ -176,7 +176,7 @@ Hit rate limit → Auto-wait 1 second → Retry → Success ✅
 
 ### Configuration:
 ```bash
-# In .env file
+# In MCP client env or process environment
 ENABLE_FILE_CACHING=true         # Enable file caching (default: true)
 MAX_RESPONSE_TOKENS=5000         # Max tokens before truncation (default: 5000)
 MAX_PER_PAGE=100                 # Max items per page (default: 100)
@@ -492,7 +492,7 @@ All optimizations are:
 
 ### Test Read-Only Mode:
 ```
-# Set READ_ONLY_MODE=true in .env
+# Set READ_ONLY_MODE=true in the MCP client env or process environment
 # Restart Claude Desktop
 
 1. Use getOrganizations → ✅ Works

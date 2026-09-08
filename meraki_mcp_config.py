@@ -93,7 +93,7 @@ def write_blocked_payload(method_name: str) -> dict[str, Any]:
     return {
         "error": "Write operation blocked - READ_ONLY_MODE is enabled",
         "method": method_name,
-        "hint": "Set READ_ONLY_MODE=false in .env to enable write operations",
+        "hint": "Set READ_ONLY_MODE=false in the MCP client env or process environment",
     }
 
 

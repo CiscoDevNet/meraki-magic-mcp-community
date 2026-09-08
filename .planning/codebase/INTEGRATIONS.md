@@ -8,7 +8,7 @@
 - Cisco Meraki Dashboard API - the core external service used for all operational reads and writes.
   - SDK/Client: `meraki==2.0.2` from `requirements.txt`
   - Implementation: `meraki.DashboardAPI(...)` in `meraki-mcp.py`, `meraki-mcp-dynamic.py`, and `inspect_tools.py`
-  - Auth: `MERAKI_API_KEY` from the repo-root `.env`, with optional default scoping from `MERAKI_ORG_ID`
+  - Auth: `MERAKI_API_KEY` from the process environment (MCP client `env` or exported host vars), with optional default scoping from `MERAKI_ORG_ID`
   - Behavior: both server variants enable SDK retry/rate-limit handling; the dynamic variant adds response caching and read-only blocking in `meraki-mcp-dynamic.py`
 
 **MCP Client Integrations:**
@@ -22,12 +22,12 @@
 **Container Runtime:**
 - Docker / Docker Compose - deployment integration defined in `Dockerfile`, `docker-compose.yml`, and `entrypoint.sh`.
   - Runtime behavior: `entrypoint.sh` selects `meraki-mcp-dynamic.py` or `meraki-mcp.py` from `MCP_SERVER`
-  - Auth: secrets are injected through `.env` referenced by `docker-compose.yml`
+  - Auth: secrets are interpolated from the host environment in `docker-compose.yml` (`MERAKI_API_KEY` is required)
 
 **Optional Sandbox Environment:**
 - Cisco DevNet Meraki sandbox - referenced in `AGENTS.md` as the recommended external environment for manual testing against non-production infrastructure.
   - SDK/Client: same `meraki` SDK usage as production
-  - Auth: sandbox-issued Meraki credentials supplied through `.env`
+  - Auth: sandbox-issued Meraki credentials supplied through the process environment
 
 ## Data Storage
 
@@ -36,12 +36,12 @@
 
 **File Storage:**
 - Local filesystem only.
-  - Cache directory: `.meraki_cache/` at the repo root by default, documented in `.env-example`, created and used in `meraki-mcp-dynamic.py`, and mounted as a Docker volume in `docker-compose.yml`
+  - Cache directory: `.meraki_cache/` at the repo root by default, created and used in `meraki-mcp-dynamic.py`, and mounted as a Docker volume in `docker-compose.yml`
   - Stored data: large truncated API responses are persisted as JSON files by `save_response_to_file(...)` in `meraki-mcp-dynamic.py`
 
 **Caching:**
 - In-memory TTL cache in `meraki-mcp-dynamic.py` via the `SimpleCache` class
-  - Control vars: `ENABLE_CACHING` and `CACHE_TTL_SECONDS` from `.env-example`
+  - Control vars: `ENABLE_CACHING` and `CACHE_TTL_SECONDS` from the process environment
 - File-backed response cache in `meraki-mcp-dynamic.py`
   - Control vars: `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, and `RESPONSE_CACHE_DIR`
   - Access helpers: `get_cached_response`, `list_cached_responses`, and `clear_cached_files` tools in `meraki-mcp-dynamic.py`
@@ -50,7 +50,7 @@
 
 **Auth Provider:**
 - Cisco Meraki API key authentication
-  - Implementation: `MERAKI_API_KEY` is loaded with `load_dotenv(...)` and passed into `meraki.DashboardAPI(...)` in both `meraki-mcp.py` and `meraki-mcp-dynamic.py`
+  - Implementation: `MERAKI_API_KEY` is read with `os.getenv(...)` and passed into `meraki.DashboardAPI(...)` in both `meraki-mcp.py` and `meraki-mcp-dynamic.py`
   - Default tenant scoping: `MERAKI_ORG_ID` is used automatically when a tool call omits an organization identifier in both variants
 
 **Client/User Authentication:**
@@ -88,7 +88,7 @@
 - `MCP_TRANSPORT` - transport selection for `stdio`, `http`, or `sse`, read in both server variants
 - `MCP_HOST` and `MCP_PORT` - bind settings for HTTP/SSE mode in both server variants
 - `MCP_SERVER` - container startup selector in `entrypoint.sh` and `docker-compose.yml`
-- Dynamic-server-only controls from `.env-example` and `meraki-mcp-dynamic.py`:
+- Dynamic-server-only controls from `meraki-mcp-dynamic.py`:
   - `ENABLE_CACHING`
   - `CACHE_TTL_SECONDS`
   - `READ_ONLY_MODE`
@@ -98,9 +98,9 @@
   - `RESPONSE_CACHE_DIR`
 
 **Secrets location:**
-- Local development: repo-root `.env` file, which exists and is ignored by `.gitignore`
-- Container deployment: `.env` loaded through `env_file` in `docker-compose.yml`
-- Safe template: `.env-example` documents the expected variables without real credentials
+- Local development: MCP client `env` block (stdio) or exported process environment
+- Container deployment: host environment interpolated by `docker-compose.yml`, or `docker run -e`
+- `.gitignore` still excludes leftover `.env` files so they are not committed
 
 ## Webhooks & Callbacks
 
@@ -117,7 +117,7 @@
 ## Transport Surface
 
 **Local process mode:**
-- `stdio` is the default in `meraki-mcp.py`, `meraki-mcp-dynamic.py`, `.env-example`, and the setup docs
+- `stdio` is the default in `meraki-mcp.py`, `meraki-mcp-dynamic.py`, and the setup docs
 
 **Remote/service mode:**
 - `http` is mapped to FastMCP StreamableHTTP in both server variants by converting `MCP_TRANSPORT=http` to `transport="streamable-http"`

@@ -46,7 +46,7 @@ Not detected
 ```
 
 **Patterns:**
-- Setup is manual and environment-driven: create `.venv`, install `requirements.txt`, copy `.env-example` to `.env`, then run one of the MCP entrypoints, as documented in `AGENTS.md` and `INSTALL.md`.
+- Setup is manual and environment-driven: create `.venv`, install `requirements.txt`, set `MERAKI_API_KEY` in the MCP client `env` or process environment, then run one of the MCP entrypoints, as documented in `AGENTS.md` and `INSTALL.md`.
 - Teardown is not documented. Manual verification relies on stopping the local Python process or `docker compose down`.
 - Assertions are human-verified. Docs in `INSTALL.md` and `README-DYNAMIC.md` tell contributors to confirm MCP server presence, inspect JSON output, and check specific response fields such as `serverInfo.name` or `api_key_configured`.
 
@@ -139,7 +139,7 @@ dashboard = meraki.DashboardAPI(api_key=MERAKI_API_KEY, suppress_logging=True)
 
 **Safety Checks:**
 - `README-DYNAMIC.md`, `QUICKSTART.md`, and `OPTIMIZATIONS.md` all encourage read-only verification before mutating calls.
-- `READ_ONLY_MODE=true` in `.env-example` and `OPTIMIZATIONS.md` is the current built-in guardrail for exploratory testing against real environments.
+- `READ_ONLY_MODE=true` in `OPTIMIZATIONS.md` is the current built-in guardrail for exploratory testing against real environments.
 
 ## Testing Gaps
 
@@ -147,7 +147,7 @@ dashboard = meraki.DashboardAPI(api_key=MERAKI_API_KEY, suppress_logging=True)
 - No automated tests exist for `meraki-mcp.py`, `meraki-mcp-dynamic.py`, or `inspect_tools.py`.
 
 **Config Validation Gap:**
-- Startup requirements around `.env` loading, `MERAKI_API_KEY`, transport selection, and cache directory handling are exercised only by manual runs of `meraki-mcp.py`, `meraki-mcp-dynamic.py`, `Dockerfile`, and `entrypoint.sh`.
+- Startup requirements around `MERAKI_API_KEY`, transport selection, and cache directory handling are exercised only by manual runs of `meraki-mcp.py`, `meraki-mcp-dynamic.py`, `Dockerfile`, and `entrypoint.sh`.
 
 **Behavioral Regression Gap:**
 - Manual tool wrappers in `meraki-mcp.py` have no regression suite to catch schema drift, renamed SDK methods, or inconsistent return shapes.

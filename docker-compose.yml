@@ -4,13 +4,15 @@ services:
     container_name: meraki-magic-mcp
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     environment:
-      - MCP_TRANSPORT=http
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT=8000
-      - MCP_SERVER=dynamic
+      MCP_TRANSPORT: http
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+      MCP_SERVER: dynamic
+      MERAKI_API_KEY: ${MERAKI_API_KEY:?Set MERAKI_API_KEY in the environment}
+      MERAKI_ORG_ID: ${MERAKI_ORG_ID:-}
+      MERAKI_BASE_URL: ${MERAKI_BASE_URL:-https://api.meraki.com/api/v1}
+      READ_ONLY_MODE: ${READ_ONLY_MODE:-true}
     volumes:
       - meraki-cache:/app/.meraki_cache
     restart: unless-stopped

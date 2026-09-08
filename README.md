@@ -55,8 +55,7 @@ cd meraki-magic-mcp-community
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env-example .env
-# Edit .env with your API credentials
+# Set credentials in the MCP client env block (see Configuration)
 ```
 
 **Windows (PowerShell):**
@@ -66,26 +65,36 @@ cd meraki-magic-mcp-community
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env-example .env
-# Edit .env with your API credentials
+# Set credentials in the MCP client env block (see Configuration)
 ```
 
 **📖 For detailed step-by-step instructions, see [INSTALL.md](INSTALL.md)**
 
 ## Configuration
 
-Edit `.env` with your Meraki credentials:
+The server reads credentials from the process environment. Do not create a project `.env` file.
 
-```env
-MERAKI_API_KEY="your_api_key_here"
-MERAKI_ORG_ID="your_org_id_here"
-MERAKI_BASE_URL="https://api.meraki.com/api/v1"
+For Claude Desktop / Cursor (stdio), put them in the client config `env` block:
 
-# Optional: Performance tuning
-ENABLE_CACHING=true
-CACHE_TTL_SECONDS=300
-READ_ONLY_MODE=true
+```json
+"env": {
+  "MERAKI_API_KEY": "your_api_key_here",
+  "MERAKI_ORG_ID": "your_org_id_here",
+  "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+  "READ_ONLY_MODE": "true"
+}
 ```
+
+For CLI, HTTP, or Docker, export the same variables in your shell:
+
+```bash
+export MERAKI_API_KEY="your_api_key_here"
+export MERAKI_ORG_ID="your_org_id_here"
+export MERAKI_BASE_URL="https://api.meraki.com/api/v1"
+export READ_ONLY_MODE=true
+```
+
+Optional tuning: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`.
 
 Get your API key from: **Meraki Dashboard → Organization → Settings → Dashboard API access**
 
@@ -123,7 +132,13 @@ There are three ways to deploy Meraki Magic MCP:
         "run",
         "-t", "stdio",
         "/path/to/meraki-magic-mcp-community/meraki-mcp-dynamic.py"
-      ]
+      ],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "READ_ONLY_MODE": "true"
+      }
     }
   }
 }
@@ -139,7 +154,13 @@ There are three ways to deploy Meraki Magic MCP:
         "run",
         "-t", "stdio",
         "C:/Users/YourName/meraki-magic-mcp-community/meraki-mcp-dynamic.py"
-      ]
+      ],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "READ_ONLY_MODE": "true"
+      }
     }
   }
 }
@@ -166,11 +187,21 @@ You can run both simultaneously:
   "mcpServers": {
     "Meraki_Curated": {
       "command": "/path/to/meraki-magic-mcp-community/.venv/bin/fastmcp",
-      "args": ["run", "-t", "stdio", "/path/to/meraki-magic-mcp-community/meraki-mcp.py"]
+      "args": ["run", "-t", "stdio", "/path/to/meraki-magic-mcp-community/meraki-mcp.py"],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "READ_ONLY_MODE": "true"
+      }
     },
     "Meraki_Full_API": {
       "command": "/path/to/meraki-magic-mcp-community/.venv/bin/fastmcp",
-      "args": ["run", "-t", "stdio", "/path/to/meraki-magic-mcp-community/meraki-mcp-dynamic.py"]
+      "args": ["run", "-t", "stdio", "/path/to/meraki-magic-mcp-community/meraki-mcp-dynamic.py"],
+      "env": {
+        "MERAKI_API_KEY": "your_api_key_here",
+        "MERAKI_ORG_ID": "your_org_id_here",
+        "READ_ONLY_MODE": "true"
+      }
     }
   }
 }
@@ -181,12 +212,12 @@ You can run both simultaneously:
 Run the MCP server over HTTP for remote access or shared team use:
 
 ```bash
-# Set transport in .env
-MCP_TRANSPORT=http
-MCP_HOST=127.0.0.1  # Use 0.0.0.0 for remote access
-MCP_PORT=8000
+export MERAKI_API_KEY="your_api_key_here"
+export MERAKI_ORG_ID="your_org_id_here"
+export MCP_TRANSPORT=http
+export MCP_HOST=127.0.0.1  # Use 0.0.0.0 for remote access
+export MCP_PORT=8000
 
-# Start the server
 python meraki-mcp-dynamic.py
 # Server available at http://127.0.0.1:8000/mcp
 ```
@@ -209,8 +240,8 @@ Connect Claude Desktop to an HTTP server using [mcp-remote](https://www.npmjs.co
 The fastest way to deploy remotely:
 
 ```bash
-cp .env-example .env
-# Edit .env with your MERAKI_API_KEY and MERAKI_ORG_ID
+export MERAKI_API_KEY="your_api_key_here"
+export MERAKI_ORG_ID="your_org_id_here"
 docker compose up -d
 # Server available at http://localhost:8000/mcp
 ```

@@ -11,10 +11,10 @@
   pip install -r requirements.txt
   ```
 
-- **Environment setup**:
+- **Environment setup**: Do not use a project `.env` file. Set `MERAKI_API_KEY` (required) and optional vars such as `MERAKI_ORG_ID` in the MCP client `env` block, or export them in the process environment:
   ```bash
-  cp .env-example .env
-  # Edit .env with your MERAKI_API_KEY and MERAKI_ORG_ID
+  export MERAKI_API_KEY="your_api_key_here"
+  export MERAKI_ORG_ID="your_org_id_here"
   ```
 
 ### Quick run examples
@@ -29,7 +29,7 @@ python meraki-mcp.py
 # Run over HTTP transport
 MCP_TRANSPORT=http python meraki-mcp-dynamic.py
 
-# Run with Docker
+# Run with Docker (requires MERAKI_API_KEY in the host environment)
 docker compose up -d
 ```
 
@@ -53,7 +53,7 @@ docker compose up -d
 
 ## PR instructions
 
-- **Security**: Do not commit real credentials or tokens. Use placeholders and document required env vars or files. The `.env` file is used for secrets and must never be committed.
+- **Security**: Do not commit real credentials or tokens. Use placeholders and document required env vars. Pass secrets through the MCP client `env` block or the process environment; never commit them.
 
 ## Contribution conventions
 
