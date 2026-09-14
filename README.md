@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/mkutka-meraki-magic-mcp-badge.png)](https://mseep.ai/app/mkutka-meraki-magic-mcp)
+
 Meraki Magic MCP
 
 Meraki Magic is a Python-based MCP (Model Context Protocol) server for Cisco's Meraki Dashboard. Meraki Magic provides tools for querying the Meraki Dashboard API to discover, monitor, and manage your Meraki environment.
