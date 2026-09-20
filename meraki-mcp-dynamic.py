@@ -19,6 +19,7 @@ from pydantic import Field
 from meraki_mcp_config import (
     CONFIRM_DESTRUCTIVE_ACTION_PARAM,
     get_meraki_base_url,
+    get_meraki_caller,
     get_read_only_mode,
     guard_write_operation,
     is_read_only_operation,
@@ -38,6 +39,7 @@ mcp = FastMCP("Meraki Magic MCP - Full API", host=MCP_HOST, port=MCP_PORT)
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY")
 MERAKI_ORG_ID = os.getenv("MERAKI_ORG_ID")
 MERAKI_BASE_URL = get_meraki_base_url()
+MERAKI_CALLER = get_meraki_caller()
 
 if not MERAKI_API_KEY:
     print(
@@ -66,6 +68,7 @@ if ENABLE_FILE_CACHING:
 dashboard = meraki.DashboardAPI(
     api_key=MERAKI_API_KEY,
     base_url=MERAKI_BASE_URL,
+    caller=MERAKI_CALLER,
     suppress_logging=True,
     maximum_retries=3,  # Auto-retry on failures
     wait_on_rate_limit=True  # Auto-wait on rate limits instead of failing
@@ -659,6 +662,7 @@ async def get_mcp_config() -> str:
         "total_available_methods": "804+",
         "read_only_mode": READ_ONLY_MODE,
         "meraki_base_url": MERAKI_BASE_URL,
+        "meraki_caller": MERAKI_CALLER,
         "caching_enabled": ENABLE_CACHING,
         "cache_ttl_seconds": CACHE_TTL_SECONDS,
         "file_caching_enabled": ENABLE_FILE_CACHING,

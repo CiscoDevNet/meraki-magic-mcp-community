@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from mcp.server.fastmcp import FastMCP
 from meraki_mcp_config import (
     get_meraki_base_url,
+    get_meraki_caller,
     get_read_only_mode,
     guard_write_operation,
 )
@@ -29,6 +30,7 @@ mcp = FastMCP("Meraki Magic MCP", host=MCP_HOST, port=MCP_PORT)
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY")
 MERAKI_ORG_ID = os.getenv("MERAKI_ORG_ID")
 MERAKI_BASE_URL = get_meraki_base_url()
+MERAKI_CALLER = get_meraki_caller()
 READ_ONLY_MODE = get_read_only_mode()
 
 if not MERAKI_API_KEY:
@@ -42,8 +44,8 @@ if not MERAKI_API_KEY:
 dashboard = meraki.DashboardAPI(
     api_key=MERAKI_API_KEY,
     base_url=MERAKI_BASE_URL,
+    caller=MERAKI_CALLER,
     suppress_logging=True,
-    caller="MerakiMagicMCP/0.1.0 Anthropic",
     maximum_retries=3,
     wait_on_rate_limit=True,
 )

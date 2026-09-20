@@ -81,6 +81,7 @@ For Claude Desktop / Cursor (stdio), put them in the client config `env` block:
   "MERAKI_API_KEY": "your_api_key_here",
   "MERAKI_ORG_ID": "your_org_id_here",
   "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+  "MERAKI_PYTHON_SDK_CALLER": "MagicMCP CiscoDevNet",
   "READ_ONLY_MODE": "true"
 }
 ```
@@ -91,6 +92,7 @@ For CLI, HTTP, or Docker, export the same variables in your shell:
 export MERAKI_API_KEY="your_api_key_here"
 export MERAKI_ORG_ID="your_org_id_here"
 export MERAKI_BASE_URL="https://api.meraki.com/api/v1"
+export MERAKI_PYTHON_SDK_CALLER="MagicMCP CiscoDevNet"
 export READ_ONLY_MODE=true
 ```
 
@@ -101,6 +103,8 @@ Get your API key from: **Meraki Dashboard → Organization → Settings → Dash
 `READ_ONLY_MODE` defaults to `true` to block create/update/delete/remove operations. Set `READ_ONLY_MODE=false` only when you intend to make changes. Delete/remove calls also require `confirm_destructive_action=true`.
 
 Use `MERAKI_BASE_URL` to point the MCP server at another Meraki region or compatible Dashboard API base URI.
+
+API calls identify this server with the default caller `MagicMCP CiscoDevNet`. Set `MERAKI_PYTHON_SDK_CALLER` in the MCP client `env` block or process environment to use your own application and vendor identifier. Follow the [Meraki user agent format](https://developer.cisco.com/meraki/api-v1/user-agents-overview/).
 
 ## Deployment Options
 
@@ -137,6 +141,7 @@ There are three ways to deploy Meraki Magic MCP:
         "MERAKI_API_KEY": "your_api_key_here",
         "MERAKI_ORG_ID": "your_org_id_here",
         "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "MERAKI_PYTHON_SDK_CALLER": "MagicMCP CiscoDevNet",
         "READ_ONLY_MODE": "true"
       }
     }
@@ -159,6 +164,7 @@ There are three ways to deploy Meraki Magic MCP:
         "MERAKI_API_KEY": "your_api_key_here",
         "MERAKI_ORG_ID": "your_org_id_here",
         "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "MERAKI_PYTHON_SDK_CALLER": "MagicMCP CiscoDevNet",
         "READ_ONLY_MODE": "true"
       }
     }

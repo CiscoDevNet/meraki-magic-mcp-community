@@ -153,6 +153,13 @@ def load_script_module(filename, module_name):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_caller_default_and_override(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(config.DEFAULT_MERAKI_CALLER, config.get_meraki_caller())
+
+        with patch.dict(os.environ, {"MERAKI_PYTHON_SDK_CALLER": "InventoryTool ExampleOrg"}, clear=True):
+            self.assertEqual("InventoryTool ExampleOrg", config.get_meraki_caller())
+
     def test_read_only_defaults_to_true_and_supports_alias(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertTrue(config.get_read_only_mode())
@@ -200,6 +207,16 @@ class DynamicServerSafetyTests(unittest.TestCase):
             load_script_module("meraki-mcp-dynamic.py", "test_dynamic_base_url")
 
         self.assertEqual("https://api.meraki.cn/api/v1", dashboard_cls.instances[0].kwargs["base_url"])
+        self.assertEqual(config.DEFAULT_MERAKI_CALLER, dashboard_cls.instances[0].kwargs["caller"])
+
+    def test_dynamic_dashboard_receives_caller_override(self):
+        with patch.dict(
+            os.environ,
+            {"MERAKI_API_KEY": "dummy", "MERAKI_PYTHON_SDK_CALLER": "InventoryTool ExampleOrg"},
+            clear=True,
+        ), fake_runtime_modules() as dashboard_cls:
+            load_script_module("meraki-mcp-dynamic.py", "test_dynamic_caller")
+            self.assertEqual("InventoryTool ExampleOrg", dashboard_cls.instances[0].kwargs["caller"])
 
     def test_dynamic_blocks_writes_by_default(self):
         with patch.dict(os.environ, {"MERAKI_API_KEY": "dummy"}, clear=True), fake_runtime_modules():
@@ -264,6 +281,16 @@ class ManualServerSafetyTests(unittest.TestCase):
             load_script_module("meraki-mcp.py", "test_manual_base_url")
 
         self.assertEqual("https://api.meraki.cn/api/v1", dashboard_cls.instances[0].kwargs["base_url"])
+        self.assertEqual(config.DEFAULT_MERAKI_CALLER, dashboard_cls.instances[0].kwargs["caller"])
+
+    def test_manual_dashboard_receives_caller_override(self):
+        with patch.dict(
+            os.environ,
+            {"MERAKI_API_KEY": "dummy", "MERAKI_PYTHON_SDK_CALLER": "InventoryTool ExampleOrg"},
+            clear=True,
+        ), fake_runtime_modules() as dashboard_cls:
+            load_script_module("meraki-mcp.py", "test_manual_caller")
+            self.assertEqual("InventoryTool ExampleOrg", dashboard_cls.instances[0].kwargs["caller"])
 
     def test_manual_destructive_tool_requires_write_mode_and_confirmation(self):
         with patch.dict(os.environ, {"MERAKI_API_KEY": "dummy"}, clear=True), fake_runtime_modules():

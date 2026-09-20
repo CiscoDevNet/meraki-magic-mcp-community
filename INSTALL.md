@@ -107,12 +107,15 @@ For CLI, HTTP, or Docker, export them in your shell:
 export MERAKI_API_KEY="your_actual_api_key_here"
 export MERAKI_ORG_ID="your_org_id_here"
 export MERAKI_BASE_URL="https://api.meraki.com/api/v1"
+export MERAKI_PYTHON_SDK_CALLER="MagicMCP CiscoDevNet"
 export READ_ONLY_MODE=true
 ```
 
 Optional tuning: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`.
 
 `READ_ONLY_MODE` defaults to `true`. Set it to `false` only when you intend to make changes. Delete/remove calls also require `confirm_destructive_action=true`.
+
+`MERAKI_PYTHON_SDK_CALLER` defaults to `MagicMCP CiscoDevNet` and identifies MCP requests in Meraki API usage records. Custom values must follow the [Meraki user agent format](https://developer.cisco.com/meraki/api-v1/user-agents-overview/).
 
 ### Step 7: Get Absolute Path for Claude Config
 ```bash
@@ -311,6 +314,7 @@ Config file: `claude_desktop_config.json`
         "MERAKI_API_KEY": "your_api_key_here",
         "MERAKI_ORG_ID": "your_org_id_here",
         "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "MERAKI_PYTHON_SDK_CALLER": "MagicMCP CiscoDevNet",
         "READ_ONLY_MODE": "true"
       }
     }
@@ -333,6 +337,7 @@ Config file: `claude_desktop_config.json`
         "MERAKI_API_KEY": "your_api_key_here",
         "MERAKI_ORG_ID": "your_org_id_here",
         "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "MERAKI_PYTHON_SDK_CALLER": "MagicMCP CiscoDevNet",
         "READ_ONLY_MODE": "true"
       }
     }
@@ -486,6 +491,7 @@ Environment variables can be exported in the host shell (used by `docker compose
 | `MERAKI_API_KEY` | *(required)* | Your Meraki Dashboard API key |
 | `MERAKI_ORG_ID` | *(optional)* | Default organization ID |
 | `MERAKI_BASE_URL` | `https://api.meraki.com/api/v1` | Dashboard API base URI for regional deployments |
+| `MERAKI_PYTHON_SDK_CALLER` | `MagicMCP CiscoDevNet` | Identifier added to API request user agents |
 | `READ_ONLY_MODE` | `true` | Blocks write operations unless explicitly set to `false` |
 
 ### Docker Commands

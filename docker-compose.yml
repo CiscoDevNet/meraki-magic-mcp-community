@@ -12,6 +12,7 @@ services:
       MERAKI_API_KEY: ${MERAKI_API_KEY:?Set MERAKI_API_KEY in the environment}
       MERAKI_ORG_ID: ${MERAKI_ORG_ID:-}
       MERAKI_BASE_URL: ${MERAKI_BASE_URL:-https://api.meraki.com/api/v1}
+      MERAKI_PYTHON_SDK_CALLER: ${MERAKI_PYTHON_SDK_CALLER:-}
       READ_ONLY_MODE: ${READ_ONLY_MODE:-true}
     volumes:
       - meraki-cache:/app/.meraki_cache

@@ -8,6 +8,7 @@ from typing import Any, MutableMapping
 
 
 DEFAULT_MERAKI_BASE_URL = "https://api.meraki.com/api/v1"
+DEFAULT_MERAKI_CALLER = "MagicMCP CiscoDevNet"
 CONFIRM_DESTRUCTIVE_ACTION_PARAM = "confirm_destructive_action"
 
 READ_ONLY_PREFIXES = ("get", "list")
@@ -67,6 +68,11 @@ def get_read_only_mode(default: bool = True) -> bool:
 def get_meraki_base_url() -> str:
     configured = os.getenv("MERAKI_BASE_URL", DEFAULT_MERAKI_BASE_URL).strip()
     return configured or DEFAULT_MERAKI_BASE_URL
+
+
+def get_meraki_caller() -> str:
+    configured = os.getenv("MERAKI_PYTHON_SDK_CALLER", "").strip()
+    return configured or DEFAULT_MERAKI_CALLER
 
 
 def is_read_only_operation(method_name: str) -> bool:

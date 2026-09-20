@@ -65,12 +65,15 @@ call_meraki_api(
 
 The server starts in read-only mode by default. Set `READ_ONLY_MODE=false` only when you intend to run create/update/delete/remove operations. Destructive `delete*` and `remove*` calls also require `confirm_destructive_action=true` in `parameters`.
 
-Set `MERAKI_BASE_URL` to use a non-default Meraki Dashboard API region, for example:
+Set these variables in the MCP client `env` block or process environment to select a region and caller identifier:
 
-```env
-MERAKI_BASE_URL="https://api.meraki.com/api/v1"
-READ_ONLY_MODE=true
+```bash
+export MERAKI_BASE_URL="https://api.meraki.com/api/v1"
+export MERAKI_PYTHON_SDK_CALLER="MagicMCP CiscoDevNet"
+export READ_ONLY_MODE=true
 ```
+
+`MERAKI_PYTHON_SDK_CALLER` defaults to `MagicMCP CiscoDevNet` and must follow the [Meraki user agent format](https://developer.cisco.com/meraki/api-v1/user-agents-overview/).
 
 ## Helper Tools Included
 
@@ -103,6 +106,7 @@ Update your `claude_desktop_config.json`:
         "MERAKI_API_KEY": "your_api_key_here",
         "MERAKI_ORG_ID": "your_org_id_here",
         "MERAKI_BASE_URL": "https://api.meraki.com/api/v1",
+        "MERAKI_PYTHON_SDK_CALLER": "MagicMCP CiscoDevNet",
         "READ_ONLY_MODE": "true"
       }
     }
