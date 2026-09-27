@@ -30,11 +30,14 @@ SDK_SECTIONS = [
     'appliance',
     'camera',
     'cellularGateway',
+    'campusGateway',
     'sensor',
     'sm',
     'insight',
     'licensing',
-    'administered'
+    'administered',
+    'spaces',
+    'wirelessController',
 ]
 
 print("=" * 100)
