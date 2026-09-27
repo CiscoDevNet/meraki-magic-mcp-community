@@ -242,11 +242,14 @@ SDK_SECTIONS = [
     'appliance',
     'camera',
     'cellularGateway',
+    'campusGateway',
     'sensor',
     'sm',
     'insight',
     'licensing',
-    'administered'
+    'administered',
+    'spaces',
+    'wirelessController',
 ]
 
 def create_cache_key(section: str, method: str, kwargs: Dict) -> str:

@@ -191,10 +191,42 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.is_write_operation("blinkDeviceLeds"))
         self.assertTrue(config.is_destructive_operation("deleteNetwork"))
         self.assertTrue(config.is_destructive_operation("removeNetworkDevices"))
+        self.assertTrue(config.is_write_operation("releaseFromOrganizationInventory"))
+        self.assertTrue(config.is_destructive_operation("releaseFromOrganizationInventory"))
         self.assertFalse(config.is_destructive_operation("updateNetwork"))
 
 
 class DynamicServerSafetyTests(unittest.TestCase):
+    def test_inventory_release_requires_write_mode_and_confirmation(self):
+        for read_only, confirmed, expected_error in [
+            ("true", False, "Write operation blocked - READ_ONLY_MODE is enabled"),
+            ("true", True, "Write operation blocked - READ_ONLY_MODE is enabled"),
+            ("false", False, "Destructive operation requires explicit confirmation"),
+            ("false", True, None),
+        ]:
+            with self.subTest(read_only=read_only, confirmed=confirmed), patch.dict(
+                os.environ,
+                {"MERAKI_API_KEY": "dummy", "READ_ONLY_MODE": read_only,
+                 "ENABLE_FILE_CACHING": "false"},
+                clear=True,
+            ), fake_runtime_modules():
+                module = load_script_module("meraki-mcp-dynamic.py", "test_dynamic_release")
+                params = {"organizationId": "123", "serials": ["Q234-ABCD-5678"],
+                          config.CONFIRM_DESTRUCTIVE_ACTION_PARAM: confirmed}
+                response = json.loads(module._call_meraki_method_internal(
+                    "organizations", "releaseFromOrganizationInventory", params))
+                if expected_error:
+                    self.assertEqual(expected_error, response["error"])
+                    self.assertEqual([], module.dashboard.calls)
+                else:
+                    self.assertEqual("releaseFromOrganizationInventory", response["method"])
+                    self.assertEqual(1, len(module.dashboard.calls))
+                    self.assertEqual(
+                        {"organizationId": "123", "serials": ["Q234-ABCD-5678"]},
+                        module.dashboard.calls[0]["kwargs"],
+                    )
+                self.assertEqual(confirmed, params[config.CONFIRM_DESTRUCTIVE_ACTION_PARAM])
+
     def test_dynamic_dashboard_receives_configured_base_url(self):
         with patch.dict(
             os.environ,

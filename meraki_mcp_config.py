@@ -17,6 +17,7 @@ WRITE_PREFIXES = (
     "update",
     "delete",
     "remove",
+    "release",
     "claim",
     "reboot",
     "assign",
@@ -31,7 +32,7 @@ WRITE_PREFIXES = (
     "generate",
     "blink",
 )
-DESTRUCTIVE_PREFIXES = ("delete", "remove")
+DESTRUCTIVE_PREFIXES = ("delete", "remove", "release")
 
 _TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 _FALSE_VALUES = {"0", "false", "no", "n", "off"}
