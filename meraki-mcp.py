@@ -219,7 +219,7 @@ async def get_organizations() -> str:
 
 # Get organization details
 @mcp.tool()
-async def get_organization_details(org_id: str = None) -> str:
+async def get_organization_details(org_id: Optional[str] = None) -> str:
     """Get details for a specific organization, defaults to the configured organization"""
     organization_id = org_id or MERAKI_ORG_ID
     org_details = await async_get_organization(organization_id)
@@ -227,7 +227,7 @@ async def get_organization_details(org_id: str = None) -> str:
 
 # Get networks from Meraki
 @mcp.tool()
-async def get_networks(org_id: str = None) -> str:
+async def get_networks(org_id: Optional[str] = None) -> str:
     """Get a list of networks from Meraki"""
     organization_id = org_id or MERAKI_ORG_ID
     networks = await async_get_organization_networks(organization_id)
@@ -235,7 +235,7 @@ async def get_networks(org_id: str = None) -> str:
 
 # Get devices from Meraki
 @mcp.tool()
-async def get_devices(org_id: str = None) -> str:
+async def get_devices(org_id: Optional[str] = None) -> str:
     """Get a list of devices from Meraki (auto-paginates)"""
     organization_id = org_id or MERAKI_ORG_ID
     devices = await async_get_organization_devices(organization_id, total_pages='all', perPage=1000)
@@ -243,7 +243,7 @@ async def get_devices(org_id: str = None) -> str:
 
 # Create network in Meraki
 @mcp.tool()
-def create_network(name: str, tags: list[str], productTypes: list[str], org_id: str = None, copyFromNetworkId: str = None) -> str:
+def create_network(name: str, tags: list[str], productTypes: list[str], org_id: Optional[str] = None, copyFromNetworkId: Optional[str] = None) -> str:
     """Create a new network in Meraki, optionally copying from another network."""
     blocked = _guard_write("createOrganizationNetwork")
     if blocked:
@@ -267,7 +267,7 @@ def delete_network(network_id: str, confirm_destructive_action: bool = False) ->
 
 # Get organization status
 @mcp.tool()
-def get_organization_status(org_id: str = None) -> str:
+def get_organization_status(org_id: Optional[str] = None) -> str:
     """Get the status and health of an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     status = dashboard.organizations.getOrganizationStatus(organization_id)
@@ -275,7 +275,7 @@ def get_organization_status(org_id: str = None) -> str:
 
 # Get organization inventory
 @mcp.tool()
-def get_organization_inventory(org_id: str = None) -> str:
+def get_organization_inventory(org_id: Optional[str] = None) -> str:
     """Get the inventory for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     inventory = dashboard.organizations.getOrganizationInventoryDevices(organization_id, total_pages='all', perPage=1000)
@@ -283,7 +283,7 @@ def get_organization_inventory(org_id: str = None) -> str:
 
 # Get organization license state
 @mcp.tool()
-def get_organization_license(org_id: str = None) -> str:
+def get_organization_license(org_id: Optional[str] = None) -> str:
     """Get the license state for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     license_state = dashboard.organizations.getOrganizationLicensesOverview(organization_id)
@@ -291,7 +291,7 @@ def get_organization_license(org_id: str = None) -> str:
 
 # Get organization configuration changes
 @mcp.tool()
-def get_organization_conf_change(org_id: str = None) -> str:
+def get_organization_conf_change(org_id: Optional[str] = None) -> str:
     """Get the org change state for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     org_config_changes = dashboard.organizations.getOrganizationConfigurationChanges(organization_id, total_pages='all', perPage=1000)
@@ -337,7 +337,7 @@ def update_network(network_id: str, update_data: NetworkUpdateSchema) -> str:
 
 # Get clients from Meraki
 @mcp.tool()
-def get_clients(network_id: str, timespan: int = 86400, statuses: str = None) -> str:
+def get_clients(network_id: str, timespan: int = 86400, statuses: Optional[str] = None) -> str:
     """
     Get a list of clients from a specific Meraki network (auto-paginates).
 
@@ -389,7 +389,7 @@ async def get_client_policy(network_id: str, client_id: str) -> str:
 
 # Update client policy
 @mcp.tool()
-def update_client_policy(network_id: str, client_id: str, device_policy: str, group_policy_id: str = None) -> str:
+def update_client_policy(network_id: str, client_id: str, device_policy: str, group_policy_id: Optional[str] = None) -> str:
     """Update policy for a client"""
     blocked = _guard_write("updateNetworkClientPolicy")
     if blocked:
@@ -559,7 +559,7 @@ def get_switch_ports(serial: str) -> str:
 
 # Update switch port
 @mcp.tool()
-def update_switch_port(serial: str, port_id: str, name: str = None, tags: list[str] = None, enabled: bool = None, vlan: int = None) -> str:
+def update_switch_port(serial: str, port_id: str, name: Optional[str] = None, tags: Optional[list[str]] = None, enabled: Optional[bool] = None, vlan: Optional[int] = None) -> str:
     """Update a switch port"""
     blocked = _guard_write("updateDeviceSwitchPort")
     if blocked:
@@ -577,7 +577,7 @@ def get_switch_vlans(network_id: str) -> str:
 
 # Create switch VLAN
 @mcp.tool()
-def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: str = None, appliance_ip: str = None) -> str:
+def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: Optional[str] = None, appliance_ip: Optional[str] = None) -> str:
     """Create a switch VLAN"""
     blocked = _guard_write("createNetworkSwitchVlan")
     if blocked:
@@ -663,7 +663,7 @@ def get_camera_quality_settings(network_id: str) -> str:
 
 # Get organization admins
 @mcp.tool()
-def get_organization_admins(org_id: str = None) -> str:
+def get_organization_admins(org_id: Optional[str] = None) -> str:
     """Get a list of organization admins"""
     organization_id = org_id or MERAKI_ORG_ID
     admins = dashboard.organizations.getOrganizationAdmins(organization_id)
@@ -671,7 +671,7 @@ def get_organization_admins(org_id: str = None) -> str:
 
 # Create organization admin
 @mcp.tool()
-def create_organization_admin(org_id: str, email: str, name: str, org_access: str, tags: list[str] = None, networks: list[dict] = None) -> str:
+def create_organization_admin(org_id: str, email: str, name: str, org_access: str, tags: Optional[list[str]] = None, networks: Optional[list[dict]] = None) -> str:
     """Create a new organization admin"""
     blocked = _guard_write("createOrganizationAdmin")
     if blocked:
@@ -692,7 +692,7 @@ def create_organization_admin(org_id: str, email: str, name: str, org_access: st
 
 # Get organization API requests
 @mcp.tool()
-def get_organization_api_requests(org_id: str = None, timespan: int = 86400) -> str:
+def get_organization_api_requests(org_id: Optional[str] = None, timespan: int = 86400) -> str:
     """Get organization API request history"""
     organization_id = org_id or MERAKI_ORG_ID
     requests = dashboard.organizations.getOrganizationApiRequests(organization_id, timespan=timespan, total_pages='all', perPage=1000)
@@ -700,7 +700,7 @@ def get_organization_api_requests(org_id: str = None, timespan: int = 86400) -> 
 
 # Get organization webhook logs
 @mcp.tool()
-def get_organization_webhook_logs(org_id: str = None, timespan: int = 86400) -> str:
+def get_organization_webhook_logs(org_id: Optional[str] = None, timespan: int = 86400) -> str:
     """Get organization webhook logs"""
     organization_id = org_id or MERAKI_ORG_ID
     logs = dashboard.organizations.getOrganizationWebhooksLogs(organization_id, timespan=timespan, total_pages='all', perPage=1000)
@@ -740,7 +740,7 @@ def get_network_alerts_settings(network_id: str) -> str:
 
 # Update network alerts settings
 @mcp.tool()
-def update_network_alerts_settings(network_id: str, defaultDestinations: dict = None, alerts: list[dict] = None) -> str:
+def update_network_alerts_settings(network_id: str, defaultDestinations: Optional[dict] = None, alerts: Optional[list[dict]] = None) -> str:
     """Update network alerts settings"""
     blocked = _guard_write("updateNetworkAlertsSettings")
     if blocked:
@@ -908,7 +908,7 @@ def get_switch_qos_rules(network_id: str) -> str:
 
 # Create switch QoS rule
 @mcp.tool()
-def create_switch_qos_rule(network_id: str, vlan: int, protocol: str, src_port: int, src_port_range: str = None, dst_port: int = None, dst_port_range: str = None, dscp: int = None) -> str:
+def create_switch_qos_rule(network_id: str, vlan: int, protocol: str, src_port: int, src_port_range: Optional[str] = None, dst_port: Optional[int] = None, dst_port_range: Optional[str] = None, dscp: Optional[int] = None) -> str:
     """Create a switch QoS rule"""
     blocked = _guard_write("createNetworkSwitchQosRule")
     if blocked:
@@ -940,7 +940,7 @@ def get_appliance_vpn_site_to_site(network_id: str) -> str:
 
 # Update appliance VPN site-to-site
 @mcp.tool()
-def update_appliance_vpn_site_to_site(network_id: str, mode: str, hubs: list[dict] = None, subnets: list[dict] = None) -> str:
+def update_appliance_vpn_site_to_site(network_id: str, mode: str, hubs: Optional[list[dict]] = None, subnets: Optional[list[dict]] = None) -> str:
     """Update appliance VPN site-to-site configuration"""
     blocked = _guard_write("updateNetworkApplianceVpnSiteToSiteVpn")
     if blocked:
@@ -958,7 +958,7 @@ def get_appliance_content_filtering(network_id: str) -> str:
 
 # Update appliance content filtering
 @mcp.tool()
-def update_appliance_content_filtering(network_id: str, allowed_urls: list[str] = None, blocked_urls: list[str] = None, blocked_url_patterns: list[str] = None, youtube_restricted_for_teenagers: bool = None, youtube_restricted_for_mature: bool = None) -> str:
+def update_appliance_content_filtering(network_id: str, allowed_urls: Optional[list[str]] = None, blocked_urls: Optional[list[str]] = None, blocked_url_patterns: Optional[list[str]] = None, youtube_restricted_for_teenagers: Optional[bool] = None, youtube_restricted_for_mature: Optional[bool] = None) -> str:
     """Update appliance content filtering settings"""
     blocked = _guard_write("updateNetworkApplianceContentFiltering")
     if blocked:
@@ -994,7 +994,7 @@ def get_appliance_traffic_shaping(network_id: str) -> str:
 
 # Update appliance traffic shaping
 @mcp.tool()
-def update_appliance_traffic_shaping(network_id: str, global_bandwidth_limits: dict = None) -> str:
+def update_appliance_traffic_shaping(network_id: str, global_bandwidth_limits: Optional[dict] = None) -> str:
     """Update appliance traffic shaping settings"""
     blocked = _guard_write("updateNetworkApplianceTrafficShaping")
     if blocked:
@@ -1033,7 +1033,7 @@ def get_camera_analytics_zones(serial: str) -> str:
 
 # Generate camera snapshot
 @mcp.tool()
-def generate_camera_snapshot(serial: str, timestamp: str = None) -> str:
+def generate_camera_snapshot(serial: str, timestamp: Optional[str] = None) -> str:
     """Generate a camera snapshot"""
     blocked = _guard_write("generateDeviceCameraSnapshot")
     if blocked:
@@ -1054,7 +1054,7 @@ def get_camera_sense(serial: str) -> str:
 
 # Update camera sense
 @mcp.tool()
-def update_camera_sense(serial: str, sense_enabled: bool = None, mqtt_broker_id: str = None, audio_detection: dict = None) -> str:
+def update_camera_sense(serial: str, sense_enabled: Optional[bool] = None, mqtt_broker_id: Optional[str] = None, audio_detection: Optional[dict] = None) -> str:
     """Update camera sense configuration"""
     blocked = _guard_write("updateDeviceCameraSense")
     if blocked:
@@ -1095,7 +1095,7 @@ def get_action_batch_status(org_id: str, batch_id: str) -> str:
 
 # Get action batches
 @mcp.tool()
-def get_action_batches(org_id: str = None) -> str:
+def get_action_batches(org_id: Optional[str] = None) -> str:
     """Get all action batches for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     batches = dashboard.organizations.getOrganizationActionBatches(organization_id)
