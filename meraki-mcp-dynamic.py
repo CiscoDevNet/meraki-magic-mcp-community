@@ -264,6 +264,20 @@ def create_cache_key(section: str, method: str, kwargs: Dict) -> str:
 # GENERIC API CALLER - Provides access to ALL 804+ endpoints
 ###################
 
+def _missing_required_params(section: str, method: str, params: dict) -> list:
+    """Return the SDK method's required parameter names that are absent from params."""
+    try:
+        sig = inspect.signature(getattr(getattr(dashboard, section), method))
+    except (AttributeError, TypeError, ValueError):
+        return []
+    return [
+        name for name, p in sig.parameters.items()
+        if name != 'self'
+        and p.default is inspect.Parameter.empty
+        and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and name not in params
+    ]
+
 def _call_meraki_method_internal(section: str, method: str, params: dict) -> str:
     """Internal helper to call Meraki API methods"""
     pagination_limited = False
@@ -376,11 +390,22 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
             "status": getattr(e, 'status', 'unknown')
         }, indent=2)
     except TypeError as e:
-        return json.dumps({
+        response = {
             "error": "Invalid parameters",
             "message": str(e),
             "hint": f"Use get_method_info(section='{section}', method='{method}') for parameter details"
-        }, indent=2)
+        }
+        missing = _missing_required_params(section, method, params)
+        if missing:
+            example = {name: "..." for name in missing}
+            response["missing_required_parameters"] = missing
+            response["received_parameters"] = sorted(params)
+            response["hint"] = (
+                "Pass method arguments inside the 'parameters' object; arguments given next to "
+                "'section' and 'method' are ignored. Example: "
+                f"call_meraki_api(section='{section}', method='{method}', parameters={json.dumps(example)})"
+            )
+        return json.dumps(response, indent=2)
     except Exception as e:
         return json.dumps({
             "error": str(e),
@@ -410,12 +435,15 @@ async def call_meraki_api(
     Args:
         section: SDK section (organizations, networks, wireless, switch, appliance, camera, devices, sensor, sm, etc.)
         method: Method name (e.g., getOrganizationAdmins, updateNetworkWirelessSsid, getNetworkApplianceFirewallL3FirewallRules)
-        parameters: Dict of parameters (e.g., {"networkId": "L_123", "name": "MySSID"})
+        parameters: Dict of the method's arguments (e.g., {"networkId": "L_123", "name": "MySSID"}).
+            All method arguments, including path IDs such as serial or networkId, go inside this
+            object; arguments placed next to section and method are ignored.
 
     Examples:
         call_meraki_api(section="organizations", method="getOrganizationAdmins", parameters={"organizationId": "123456"})
         call_meraki_api(section="wireless", method="updateNetworkWirelessSsid", parameters={"networkId": "L_123", "number": "0", "name": "NewSSID", "enabled": True})
         call_meraki_api(section="appliance", method="getNetworkApplianceFirewallL3FirewallRules", parameters={"networkId": "L_123"})
+        call_meraki_api(section="devices", method="getDeviceLldpCdp", parameters={"serial": "Q2XX-XXXX-XXXX"})
     """
     # Call internal method (parameters is always a dict due to default_factory)
     return await to_async(_call_meraki_method_internal)(section, method, parameters)
@@ -430,7 +458,7 @@ async def getOrganizations() -> str:
     return await call_meraki_method("organizations", "getOrganizations")
 
 @mcp.tool()
-async def getOrganizationAdmins(organizationId: str = None) -> str:
+async def getOrganizationAdmins(organizationId: Optional[str] = None) -> str:
     """Get organization administrators"""
     params = {}
     if organizationId:
@@ -438,7 +466,7 @@ async def getOrganizationAdmins(organizationId: str = None) -> str:
     return await call_meraki_method("organizations", "getOrganizationAdmins", **params)
 
 @mcp.tool()
-async def getOrganizationNetworks(organizationId: str = None) -> str:
+async def getOrganizationNetworks(organizationId: Optional[str] = None) -> str:
     """Get organization networks"""
     params = {}
     if organizationId:
@@ -446,7 +474,7 @@ async def getOrganizationNetworks(organizationId: str = None) -> str:
     return await call_meraki_method("organizations", "getOrganizationNetworks", **params)
 
 @mcp.tool()
-async def getOrganizationDevices(organizationId: str = None) -> str:
+async def getOrganizationDevices(organizationId: Optional[str] = None) -> str:
     """Get organization devices"""
     params = {}
     if organizationId:
@@ -464,7 +492,7 @@ async def getNetworkClients(networkId: str, timespan: int = 86400) -> str:
     return await call_meraki_method("networks", "getNetworkClients", networkId=networkId, timespan=timespan)
 
 @mcp.tool()
-async def getNetworkEvents(networkId: str, productType: str = None, perPage: int = 100) -> str:
+async def getNetworkEvents(networkId: str, productType: Optional[str] = None, perPage: int = 100) -> str:
     """Get network events"""
     params = {"networkId": networkId, "perPage": perPage}
     if productType:
@@ -496,12 +524,12 @@ async def getDeviceSwitchPorts(serial: str) -> str:
 async def updateDeviceSwitchPort(
     serial: str,
     portId: str,
-    name: str = None,
-    enabled: bool = None,
-    poeEnabled: bool = None,
-    type: str = None,
-    vlan: int = None,
-    voiceVlan: int = None,
+    name: Optional[str] = None,
+    enabled: Optional[bool] = None,
+    poeEnabled: Optional[bool] = None,
+    type: Optional[str] = None,
+    vlan: Optional[int] = None,
+    voiceVlan: Optional[int] = None,
 ) -> str:
     """Update switch port configuration. For the full parameter set use call_meraki_api."""
     params = {
@@ -542,7 +570,7 @@ _METHOD_INDEX = _build_method_index()
 ###################
 
 @mcp.tool()
-async def list_all_methods(section: str = None) -> str:
+async def list_all_methods(section: Optional[str] = None) -> str:
     """
     List all available Meraki API methods
 
@@ -562,7 +590,7 @@ async def list_all_methods(section: str = None) -> str:
     return json.dumps({
         "sections": sections_to_show,
         "total_methods": sum(len(v) for v in sections_to_show.values()),
-        "usage": "Use call_meraki_api(section='...', method='...', parameters='{...}') to call any method"
+        "usage": "Use call_meraki_api(section='...', method='...', parameters={...}) to call any method"
     }, indent=2)
 
 @mcp.tool()
@@ -584,7 +612,7 @@ async def search_methods(keyword: str) -> str:
         "keyword": keyword,
         "results": results,
         "total_matches": sum(len(v) for v in results.values()),
-        "usage": "Use call_meraki_api(section='...', method='...', parameters='{...}')"
+        "usage": "Use call_meraki_api(section='...', method='...', parameters={...})"
     }, indent=2)
 
 @mcp.tool()
@@ -627,7 +655,7 @@ async def get_method_info(section: str, method: str) -> str:
             "method": method,
             "parameters": params,
             "docstring": inspect.getdoc(method_func),
-            "usage_example": f'call_meraki_api(section="{section}", method="{method}", parameters=\'{{...}}\')'
+            "usage_example": f'call_meraki_api(section="{section}", method="{method}", parameters={{...}})'
         }, indent=2)
 
     except Exception as e:

@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import json
 import os
@@ -112,6 +113,7 @@ def fake_field(default=None, default_factory=None, **kwargs):
 def fake_runtime_modules():
     fake_meraki = types.ModuleType("meraki")
     fake_meraki.DashboardAPI = FakeDashboardAPI
+    fake_meraki.exceptions = types.SimpleNamespace(APIError=type("APIError", (Exception,), {}))
 
     fake_mcp = types.ModuleType("mcp")
     fake_mcp_server = types.ModuleType("mcp.server")
@@ -298,6 +300,78 @@ class DynamicServerSafetyTests(unittest.TestCase):
                 config.CONFIRM_DESTRUCTIVE_ACTION_PARAM,
                 module.dashboard.calls[-1]["kwargs"],
             )
+
+
+class DynamicServerParameterTests(unittest.TestCase):
+    def test_missing_required_parameter_explains_parameters_object(self):
+        with patch.dict(os.environ, {"MERAKI_API_KEY": "dummy", "ENABLE_FILE_CACHING": "false"},
+                        clear=True), fake_runtime_modules():
+            module = load_script_module("meraki-mcp-dynamic.py", "test_dynamic_missing_param")
+            module.dashboard.devices = types.SimpleNamespace(
+                getDeviceLldpCdp=lambda serial: {"serial": serial}
+            )
+
+            missing = json.loads(module._call_meraki_method_internal(
+                "devices", "getDeviceLldpCdp", {}))
+            ok = json.loads(module._call_meraki_method_internal(
+                "devices", "getDeviceLldpCdp", {"serial": "Q2XX-AAAA-BBBB"}))
+
+        self.assertEqual("Invalid parameters", missing["error"])
+        self.assertEqual(["serial"], missing["missing_required_parameters"])
+        self.assertEqual([], missing["received_parameters"])
+        self.assertIn('parameters={"serial": "..."}', missing["hint"])
+        self.assertEqual({"serial": "Q2XX-AAAA-BBBB"}, ok)
+
+
+@contextmanager
+def fake_meraki_module():
+    fake_meraki = types.ModuleType("meraki")
+    fake_meraki.DashboardAPI = FakeDashboardAPI
+    fake_meraki.exceptions = types.SimpleNamespace(APIError=type("APIError", (Exception,), {}))
+    sentinel = object()
+    original = sys.modules.get("meraki", sentinel)
+    sys.modules["meraki"] = fake_meraki
+    try:
+        yield
+    finally:
+        if original is sentinel:
+            sys.modules.pop("meraki", None)
+        else:
+            sys.modules["meraki"] = original
+
+
+def fastmcp_available():
+    try:
+        import mcp.server.fastmcp  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@unittest.skipUnless(fastmcp_available(), "mcp.server.fastmcp is not installed")
+class ToolSchemaTests(unittest.TestCase):
+    def test_null_default_arguments_accept_null(self):
+        for filename in ["meraki-mcp.py", "meraki-mcp-dynamic.py"]:
+            with self.subTest(filename=filename), patch.dict(
+                os.environ, {"MERAKI_API_KEY": "dummy", "ENABLE_FILE_CACHING": "false"}, clear=True
+            ), fake_meraki_module():
+                module = load_script_module(filename, f"test_schema_{filename.replace('-', '_')}")
+                for tool in module.mcp._tool_manager.list_tools():
+                    for name, prop in tool.parameters.get("properties", {}).items():
+                        if "default" in prop and prop["default"] is None:
+                            types_allowed = [prop.get("type")] + [
+                                option.get("type") for option in prop.get("anyOf", [])
+                            ]
+                            self.assertIn("null", types_allowed, f"{tool.name}.{name}")
+
+    def test_explicit_null_reaches_tool(self):
+        with patch.dict(
+            os.environ, {"MERAKI_API_KEY": "dummy", "ENABLE_FILE_CACHING": "false"}, clear=True
+        ), fake_meraki_module():
+            module = load_script_module("meraki-mcp-dynamic.py", "test_schema_null_call")
+            asyncio.run(module.mcp.call_tool("getOrganizationNetworks", {"organizationId": None}))
+
+        self.assertEqual("getOrganizationNetworks", module.dashboard.calls[-1]["method"])
 
 
 class ManualServerSafetyTests(unittest.TestCase):
