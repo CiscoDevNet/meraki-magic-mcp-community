@@ -454,7 +454,7 @@ Do not keep credentials in a project `.env` file. Compose interpolates `MERAKI_A
 docker compose up -d
 ```
 
-The server starts on `http://localhost:8000/mcp` using the dynamic MCP (804+ endpoints).
+The server starts on `http://localhost:8000/mcp` using the dynamic MCP (full API).
 
 **Step 3: Verify**
 ```bash
@@ -487,7 +487,7 @@ Environment variables can be exported in the host shell (used by `docker compose
 | `MCP_TRANSPORT` | `http` | Transport mode (http, stdio, sse) |
 | `MCP_HOST` | `0.0.0.0` | Bind address |
 | `MCP_PORT` | `8000` | Bind port |
-| `MCP_SERVER` | `dynamic` | Server file: `dynamic` (804+ endpoints) or `manual` (curated tools) |
+| `MCP_SERVER` | `dynamic` | Server file: `dynamic` (full API) or `manual` (curated tools) |
 | `MERAKI_API_KEY` | *(required)* | Your Meraki Dashboard API key |
 | `MERAKI_ORG_ID` | *(optional)* | Default organization ID |
 | `MERAKI_BASE_URL` | `https://api.meraki.com/api/v1` | Dashboard API base URI for regional deployments |
@@ -554,8 +554,8 @@ Use get_mcp_config to show me the MCP configuration
 
 Expected response includes:
 - `mode: "hybrid"`
-- `pre_registered_tools: 12`
-- `total_available_methods: "804+"`
+- `pre_registered_tools`: a list of 12 tool names
+- `total_available_methods`: the number of SDK methods (1039 with Meraki SDK 4.7)
 - `api_key_configured: true`
 
 ### Common Test Queries:
@@ -668,6 +668,48 @@ dir .venv\Scripts\fastmcp.exe
 
 # If missing, reinstall:
 pip install --force-reinstall fastmcp
+```
+
+### Issue: macOS "Operation not permitted" when Claude Desktop starts the server
+
+**Symptom** (in the Claude Desktop MCP log):
+```
+Fatal Python error: init_import_site: Failed to import the site module
+PermissionError: [Errno 1] Operation not permitted: '.../Documents/.../.venv/pyvenv.cfg'
+```
+
+**Cause:** macOS privacy protection blocks Claude Desktop from reading protected folders such as `Documents`, `Desktop` and `Downloads`, so Python cannot read the virtual environment.
+
+**Solution:** Keep the project outside those folders (for example `~/meraki-magic-mcp-community`), or grant Claude access under System Settings → Privacy & Security → Files and Folders. If you move the project, recreate the virtual environment as described in the next issue.
+
+### Issue: "spawn .../.venv/bin/fastmcp ENOENT" after moving the project folder
+
+**Cause:** A virtual environment stores absolute paths, so it breaks when the project folder is moved or renamed.
+
+**Solution:** Recreate it in the new location and update the paths in `claude_desktop_config.json`:
+```bash
+rm -rf .venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Issue: "Read-only file system: '.meraki_cache'" or a cache directory warning
+
+**Cause:** Large responses are saved under `RESPONSE_CACHE_DIR`, which defaults to `.meraki_cache` inside the project folder. Some MCP hosts run servers in a sandbox where that folder is not writable.
+
+**Behavior:** The server still starts. It logs `WARNING: cannot create response cache directory ...` and runs with file caching disabled, so large responses are returned in full instead of being saved and previewed. Lower `MAX_PER_PAGE` or use narrower queries if they are too large for the conversation.
+
+**Solution:** Point the cache at a writable location in the MCP client `env` block, or turn file caching off:
+```json
+"env": {
+  "RESPONSE_CACHE_DIR": "/tmp/meraki_cache"
+}
+```
+```json
+"env": {
+  "ENABLE_FILE_CACHING": "false"
+}
 ```
 
 ### Issue: Windows PowerShell execution policy error

@@ -1,185 +1,107 @@
 # Keeping Your Meraki MCP Up-to-Date
 
-## How Updates Work
+## How updates work
 
-The **dynamic MCP doesn't use the Postman collection** - it uses Python introspection on the Meraki SDK. This means:
+The dynamic MCP discovers API methods by inspecting the installed Meraki Python SDK. It does not use the Postman collection or a hand-maintained endpoint list.
 
-✅ **When Meraki releases new API endpoints** → They update the Meraki Python SDK
-✅ **When you update the SDK** → Your MCP automatically has the new endpoints
-✅ **No code changes needed** → Just update the SDK and restart Claude Desktop
+- When Meraki releases new API endpoints, they publish a new version of the Meraki Python SDK
+- When the SDK is upgraded, `call_meraki_api` and the discovery tools see the new methods with no code changes
+- The manual MCP (`meraki-mcp.py`) wraps specific SDK methods by hand, so its tools only change when the code does
 
-## Quick Update
+## Updating to the latest release of this project (recommended)
+
+Each release of this project pins an SDK version in `requirements.txt` that the test suite has been run against:
+
+```bash
+cd /path/to/meraki-magic-mcp-community
+git pull
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Then restart Claude Desktop (or the server process, or `docker compose up -d --build` for Docker).
+
+## Trying a newer SDK than the pinned one
+
+To use an SDK release before this project has adopted it, upgrade it in your virtual environment:
 
 ```bash
 cd /path/to/meraki-magic-mcp-community
 source .venv/bin/activate
-pip install --upgrade meraki
+pip install --upgrade "meraki<5"
+python -m unittest discover -s tests
 ```
 
-Then restart Claude Desktop - you'll automatically have any new endpoints!
+Run the tests before relying on the upgrade. They check the installed SDK and fail when:
 
-## Automated Update Checker
+- a new SDK method starts with a verb that has not been reviewed for read-only mode
+- a delete-like method would run without `confirm_destructive_action`
+- a method used by the manual server no longer exists
 
-I've created `update_meraki.py` that:
-- ✅ Checks for new Meraki SDK versions
-- ✅ Shows you what's new
-- ✅ Updates the SDK
-- ✅ Counts new endpoints
-- ✅ Optionally downloads latest Postman collection (for reference)
+Read-only mode is safe either way: any method that is not a `get*`/`list*` read is blocked while `READ_ONLY_MODE=true`.
 
-### Run the Update Checker
+## Bumping the pinned SDK (contributors)
+
+`pyproject.toml` holds the allowed version range and `requirements.txt` is the lockfile generated from it. To move the pin:
 
 ```bash
-cd /path/to/meraki-magic-mcp-community
-source .venv/bin/activate
-python3 update_meraki.py
+uv pip compile pyproject.toml -o requirements.txt --universal --upgrade-package meraki
+pip install -r requirements.txt
+python -m unittest discover -s tests
 ```
 
-It will:
-1. Check your current SDK version
-2. Check PyPI for the latest version
-3. Ask if you want to update
-4. Show how many new endpoints were added
-5. Optionally download the latest Postman collection
+If the tests report unreviewed verbs, add them to `WRITE_PREFIXES` in `meraki_mcp_config.py` (and to `DESTRUCTIVE_PREFIXES` if they delete or wipe data). If they report a missing manual-server method, update that tool in `meraki-mcp.py`. Commit `pyproject.toml`, `requirements.txt` and any code changes together.
 
-## Schedule Automatic Checks (Optional)
-
-### Option 1: Manual (Recommended)
-
-Run the update checker once a month:
-```bash
-cd /path/to/meraki-magic-mcp-community && source .venv/bin/activate && python3 update_meraki.py
-```
-
-### Option 2: Cron Job (Advanced)
-
-Add to your crontab to check weekly:
-```bash
-# Edit crontab
-crontab -e
-
-# Add this line (checks every Monday at 9 AM)
-0 9 * * 1 cd /path/to/meraki-magic-mcp-community && .venv/bin/python3 update_meraki.py
-```
-
-### Option 3: Launchd (macOS native)
-
-Create a launch agent for macOS:
-
-1. Create the plist file:
-```bash
-nano ~/Library/LaunchAgents/com.meraki.mcp.update.plist
-```
-
-2. Add this content:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.meraki.mcp.update</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/path/to/meraki-magic-mcp-community/.venv/bin/python3</string>
-        <string>/path/to/meraki-magic-mcp-community/update_meraki.py</string>
-    </array>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>9</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-        <key>Weekday</key>
-        <integer>1</integer>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>/path/to/meraki-magic-mcp-community/update.log</string>
-    <key>StandardErrorPath</key>
-    <string>/path/to/meraki-magic-mcp-community/update_error.log</string>
-</dict>
-</plist>
-```
-
-3. Load it:
-```bash
-launchctl load ~/Library/LaunchAgents/com.meraki.mcp.update.plist
-```
-
-## Postman Collection (Optional)
-
-The Postman collection is **only used for reference/comparison** - it's not required for the MCP to work.
-
-### Manual Download
-Go to: https://www.postman.com/meraki-api/cisco-meraki-s-public-workspace/overview
-
-### Automatic Download
-1. Get a Postman API key: https://web.postman.co/settings/me/api-keys
-2. Set environment variable:
-   ```bash
-   export POSTMAN_API_KEY='your-key-here'
-   ```
-3. Run the update script:
-   ```bash
-   python3 update_meraki.py
-   ```
-
-The script will download the latest collection and archive old ones.
-
-## Update Workflow
+## Update workflow
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Meraki releases new API features          │
+│  Meraki releases new API features           │
 └────────────────┬────────────────────────────┘
                  │
                  ▼
 ┌─────────────────────────────────────────────┐
-│  Meraki updates Python SDK on PyPI          │
+│  Meraki updates the Python SDK on PyPI      │
 └────────────────┬────────────────────────────┘
                  │
                  ▼
 ┌─────────────────────────────────────────────┐
-│  You run: pip install --upgrade meraki      │
+│  The SDK is upgraded and the tests pass     │
 └────────────────┬────────────────────────────┘
                  │
                  ▼
 ┌─────────────────────────────────────────────┐
-│  Restart Claude Desktop                     │
+│  Restart the MCP server                     │
 └────────────────┬────────────────────────────┘
                  │
                  ▼
 ┌─────────────────────────────────────────────┐
-│  Dynamic MCP automatically has new endpoints│
+│  Dynamic MCP has the new methods            │
 └─────────────────────────────────────────────┘
 ```
 
-## Checking for New Endpoints
+## Checking for new methods
 
-After updating, you can see what's new:
+After updating, you can see what is available:
 
 ```bash
-# Count current endpoints
+# Count methods per section in the installed SDK
 python3 inspect_tools.py
-
-# Or in Claude Desktop, use:
-list_available_tools
-search_tools with keyword="new_feature_name"
 ```
 
-## Version History Tracking
+Or in Claude Desktop:
 
-The update script will tell you:
-- Current SDK version
-- Latest available version
-- How many new endpoints were added
-- Total endpoints available
+```
+Use list_all_methods to show the method count per section
+Use search_methods with keyword="new_feature_name"
+```
 
-## Recommended Schedule
+`get_mcp_config` reports the total in `total_available_methods`.
 
-- **Check monthly**: Most users
-- **Check weekly**: If you're actively developing
-- **Check before major deployments**: Always good practice
+## Recommended schedule
+
+- **Monthly**: most users
+- **Before major deployments**: always good practice
 
 ## Troubleshooting
 
@@ -187,25 +109,23 @@ The update script will tell you:
 ```bash
 cd /path/to/meraki-magic-mcp-community
 source .venv/bin/activate
-pip install meraki
+pip install -r requirements.txt
 ```
 
 ### "pip: command not found"
 ```bash
-python3 -m pip install --upgrade meraki
+python3 -m pip install -r requirements.txt
 ```
 
-### Update doesn't seem to work
-1. Make sure you're in the virtual environment
-2. Check you have internet connection
-3. Try: `pip install --upgrade --force-reinstall meraki`
+### The update doesn't seem to work
+1. Make sure the virtual environment is activated
+2. Check the installed version with `pip show meraki`
+3. Restart Claude Desktop completely; the server only reads the SDK at startup
 
 ## Summary
 
-**The key thing to remember**: The dynamic MCP uses the Meraki Python SDK, not the Postman collection. So:
+The dynamic MCP reads its method list from the Meraki Python SDK:
 
-1. Update the SDK: `pip install --upgrade meraki`
-2. Restart Claude Desktop
-3. Done! You have all new endpoints.
-
-No code changes. No manual endpoint mapping. Fully automated! 🚀
+1. Update the project (`git pull`, then `pip install -r requirements.txt`)
+2. Restart the MCP server
+3. New SDK methods are available through `call_meraki_api`

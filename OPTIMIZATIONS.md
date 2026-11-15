@@ -389,11 +389,13 @@ Response:
   "file_caching_enabled": true,
   "max_response_tokens": 5000,
   "max_per_page": 100,
-  "response_cache_dir": ".meraki_cache",
+  "cache_max_items": 500,
+  "response_cache_dir": "/path/to/meraki-magic-mcp-community/.meraki_cache",
+  "response_cache_max_age_hours": 24.0,
+  "response_cache_max_mb": 100.0,
   "organization_id_configured": true,
   "api_key_configured": true,
-  "total_tools": 804,
-  "sdk_sections": ["organizations", "networks", ...]
+  "total_available_methods": 1039
 }
 ```
 

@@ -4,14 +4,16 @@
 # SPDX-License-Identifier: MIT
 
 """
-Inspection script to see what tools would be registered in the dynamic MCP
+Inspection script to see which SDK methods the dynamic MCP can call
 This script does NOT make any API calls - it only inspects the SDK structure
 """
 
 import os
 import meraki
 import inspect
-from meraki_mcp_config import get_meraki_base_url
+import re
+from pathlib import Path
+from meraki_mcp_config import SDK_SECTIONS, get_meraki_base_url
 
 # Initialize SDK (with dummy key for inspection - won't make calls)
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY", "dummy_key")
@@ -21,33 +23,14 @@ dashboard = meraki.DashboardAPI(
     suppress_logging=True,
 )
 
-SDK_SECTIONS = [
-    'organizations',
-    'networks',
-    'devices',
-    'wireless',
-    'switch',
-    'appliance',
-    'camera',
-    'cellularGateway',
-    'campusGateway',
-    'sensor',
-    'sm',
-    'insight',
-    'licensing',
-    'administered',
-    'spaces',
-    'wirelessController',
-]
-
 print("=" * 100)
 print("MERAKI MCP DYNAMIC TOOL INSPECTION")
 print("=" * 100)
-print("\nThis script inspects the Meraki SDK to show what tools would be registered.")
+print("\nThis script inspects the Meraki SDK to show which methods call_meraki_api can reach.")
 print("NO API CALLS ARE MADE - This is safe to run with your production API key.\n")
 
 print("=" * 100)
-print("TOOL COUNT BY SECTION")
+print("METHOD COUNT BY SECTION")
 print("=" * 100)
 
 total_tools = 0
@@ -64,27 +47,26 @@ for section_name in SDK_SECTIONS:
     section_details[section_name] = sorted(methods)
     total_tools += len(methods)
 
-    print(f"{section_name:20} : {len(methods):4} tools")
+    print(f"{section_name:20} : {len(methods):4} methods")
 
 print("=" * 100)
-print(f"{'TOTAL':20} : {total_tools:4} tools")
+print(f"{'TOTAL':20} : {total_tools:4} methods")
 
 # Show examples from each section
 print("\n" + "=" * 100)
-print("SAMPLE TOOLS FROM EACH SECTION (first 5 per section)")
+print("SAMPLE METHODS FROM EACH SECTION (first 5 per section)")
 print("=" * 100)
 
 for section_name, methods in section_details.items():
     print(f"\n{section_name.upper()}:")
     for method in methods[:5]:
-        tool_name = f"{section_name}_{method}"
-        print(f"  • {tool_name}")
+        print(f"  • call_meraki_api(section='{section_name}', method='{method}', ...)")
     if len(methods) > 5:
         print(f"  ... and {len(methods) - 5} more")
 
 # Show parameter inspection for a few example methods
 print("\n" + "=" * 100)
-print("EXAMPLE TOOL PARAMETER DETAILS")
+print("EXAMPLE METHOD PARAMETER DETAILS")
 print("=" * 100)
 
 example_methods = [
@@ -98,7 +80,7 @@ for section_name, method_name in example_methods:
     section_obj = getattr(dashboard, section_name)
     method = getattr(section_obj, method_name)
 
-    print(f"\n{section_name}_{method_name}")
+    print(f"\n{section_name}.{method_name}")
     print("-" * 100)
 
     # Get method signature
@@ -140,9 +122,9 @@ for term in search_terms:
     for section_name, methods in section_details.items():
         for method in methods:
             if term.lower() in method.lower():
-                matches.append(f"{section_name}_{method}")
+                matches.append(f"{section_name}.{method}")
 
-    print(f"\nSearch: '{term}' - Found {len(matches)} tools")
+    print(f"\nSearch: '{term}' - Found {len(matches)} methods")
     for match in matches[:10]:
         print(f"  • {match}")
     if len(matches) > 10:
@@ -153,12 +135,13 @@ print("\n" + "=" * 100)
 print("COVERAGE COMPARISON")
 print("=" * 100)
 
-manual_mcp_tools = 40  # From the original meraki-mcp.py
-dynamic_mcp_tools = total_tools
+# Count the tools registered by the manual server from its source
+manual_source = (Path(__file__).resolve().parent / "meraki-mcp.py").read_text()
+manual_mcp_tools = len(re.findall(r"^@(?:mcp\.tool\(\)|threaded_tool)$", manual_source, flags=re.M))
+dynamic_mcp_methods = total_tools
 
-print(f"\nManual MCP (meraki-mcp.py):     {manual_mcp_tools:4} tools")
-print(f"Dynamic MCP (meraki-mcp-dynamic.py): {dynamic_mcp_tools:4} tools")
-print(f"\nIncrease: {dynamic_mcp_tools - manual_mcp_tools} tools ({(dynamic_mcp_tools / manual_mcp_tools):.1f}x more coverage)")
+print(f"\nManual MCP (meraki-mcp.py):          {manual_mcp_tools:4} curated tools")
+print(f"Dynamic MCP (meraki-mcp-dynamic.py): {dynamic_mcp_methods:4} SDK methods via call_meraki_api")
 
 print("\n" + "=" * 100)
 print("INSPECTION COMPLETE")
@@ -167,5 +150,5 @@ print("\nNext steps:")
 print("1. Review the tool counts and examples above")
 print("2. Update your claude_desktop_config.json to use meraki-mcp-dynamic.py")
 print("3. Restart Claude Desktop")
-print("4. Test with helper tools first (list_available_tools, search_tools)")
+print("4. Test with helper tools first (list_all_methods, search_methods, get_method_info)")
 print("5. Start with read-only operations before trying updates/deletes")

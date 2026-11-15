@@ -19,6 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 from meraki_mcp_config import (
     CONFIRM_DESTRUCTIVE_ACTION_PARAM,
+    SDK_SECTIONS,
     get_meraki_base_url,
     get_meraki_caller,
     get_read_only_mode,
@@ -72,9 +73,19 @@ PREVIEW_BUDGET_CHARS = MAX_RESPONSE_TOKENS * 2
 PREVIEW_MAX_ITEMS = 3
 
 # Create cache directory if it doesn't exist
-# Cached responses can contain sensitive configuration, so keep the directory private
+# Cached responses can contain sensitive configuration, so keep the directory private.
+# Some MCP hosts run servers in a sandbox with a read-only filesystem; fall back to
+# running without file caching rather than failing to start.
 if ENABLE_FILE_CACHING:
-    Path(RESPONSE_CACHE_DIR).mkdir(mode=0o700, exist_ok=True)
+    try:
+        Path(RESPONSE_CACHE_DIR).mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as e:
+        print(
+            f"WARNING: cannot create response cache directory '{RESPONSE_CACHE_DIR}' ({e}). "
+            "File caching is disabled; set RESPONSE_CACHE_DIR to a writable path to enable it.",
+            file=sys.stderr,
+        )
+        ENABLE_FILE_CACHING = False
 
 # Initialize Meraki API client with optimizations
 dashboard = meraki.DashboardAPI(
@@ -365,26 +376,6 @@ def to_async(func):
 # DYNAMIC TOOL GENERATION
 ###################
 
-# SDK sections to expose
-SDK_SECTIONS = [
-    'organizations',
-    'networks',
-    'devices',
-    'wireless',
-    'switch',
-    'appliance',
-    'camera',
-    'cellularGateway',
-    'campusGateway',
-    'sensor',
-    'sm',
-    'insight',
-    'licensing',
-    'administered',
-    'spaces',
-    'wirelessController',
-]
-
 def create_cache_key(section: str, method: str, kwargs: Dict) -> str:
     """Create a cache key from method call.
     Format: '<section>::<md5hash>' so invalidate(section) clears all related entries.
@@ -394,7 +385,7 @@ def create_cache_key(section: str, method: str, kwargs: Dict) -> str:
     return f"{section}::{key_hash}"
 
 ###################
-# GENERIC API CALLER - Provides access to ALL 804+ endpoints
+# GENERIC API CALLER - Provides access to every method in the exposed SDK sections
 ###################
 
 def _resolve_sdk_method(section: str, method: str):
@@ -586,7 +577,7 @@ async def call_meraki_api(
     )
 ) -> str:
     """
-    Call any Meraki API method - provides access to all 804+ endpoints
+    Call any Meraki API method - provides access to the full Meraki Dashboard API
 
     Use search_methods(keyword=...) to find a method and get_method_info(section, method)
     for its parameters before calling it.
@@ -701,7 +692,6 @@ async def updateDeviceSwitchPort(
     }
     return await call_meraki_method("switch", "updateDeviceSwitchPort", **params)
 
-print("Registered hybrid MCP: 12 common tools + call_meraki_api for full API access (804+ methods)", file=sys.stderr)
 
 ###################
 # METHOD INDEX (built once at startup - SDK structure is static)
@@ -723,6 +713,12 @@ def _build_method_index() -> Dict:
     return index
 
 _METHOD_INDEX = _build_method_index()
+TOTAL_METHODS = sum(len(methods) for methods in _METHOD_INDEX.values())
+
+print(
+    f"Registered hybrid MCP: 12 common tools + call_meraki_api for full API access ({TOTAL_METHODS} methods)",
+    file=sys.stderr,
+)
 
 ###################
 # DISCOVERY TOOLS
@@ -882,8 +878,8 @@ async def get_mcp_config() -> str:
                                   "getOrganizationDevices", "getNetwork", "getNetworkClients",
                                   "getNetworkEvents", "getNetworkDevices", "getDevice",
                                   "getNetworkWirelessSsids", "getDeviceSwitchPorts", "updateDeviceSwitchPort"],
-        "generic_caller": "call_meraki_api - access all 804+ methods",
-        "total_available_methods": "804+",
+        "generic_caller": "call_meraki_api - access every method in the exposed SDK sections",
+        "total_available_methods": TOTAL_METHODS,
         "read_only_mode": READ_ONLY_MODE,
         "meraki_base_url": MERAKI_BASE_URL,
         "meraki_caller": MERAKI_CALLER,

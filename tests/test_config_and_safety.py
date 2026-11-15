@@ -594,6 +594,56 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual("getOrganizationNetworks", module.dashboard.calls[-1]["method"])
 
 
+class DocumentationTests(unittest.TestCase):
+    """Catch the doc drift that has happened before: renamed tools and stale counts."""
+
+    STALE = [
+        "list_available_tools",
+        "search_tools",
+        "get_tool_info",
+        "organizations_getOrganization",
+        "networks_getNetwork",
+        "update_meraki.py",
+        "804",
+        "40 curated",
+        "40 hand-coded",
+    ]
+
+    def test_docs_do_not_mention_removed_tools_or_old_counts(self):
+        found = []
+        for path in sorted(ROOT.glob("*.md")) + [ROOT / "entrypoint.sh", ROOT / "inspect_tools.py"]:
+            text = path.read_text()
+            found += [f"{path.name}: {term}" for term in self.STALE if term in text]
+        self.assertEqual([], found)
+
+    def test_documented_tool_counts_match_the_servers(self):
+        import re
+
+        manual = (ROOT / "meraki-mcp.py").read_text()
+        manual_tools = len(re.findall(r"^@(?:mcp\.tool\(\)|threaded_tool)$", manual, flags=re.M))
+        dynamic = (ROOT / "meraki-mcp-dynamic.py").read_text()
+        dynamic_tools = len(re.findall(r"^@mcp\.tool\(\)$", dynamic, flags=re.M))
+
+        self.assertIn(f"**{manual_tools} curated tools**", (ROOT / "README.md").read_text())
+        comparison = (ROOT / "COMPARISON.md").read_text()
+        self.assertIn(f"{manual_tools} hand-written tools", comparison)
+        self.assertIn(f"{dynamic_tools} tools:", comparison)
+
+    def test_sdk_sections_cover_every_section_of_the_installed_sdk(self):
+        try:
+            import meraki
+        except ImportError:
+            self.skipTest("Meraki SDK is not installed")
+
+        dashboard = meraki.DashboardAPI(api_key="dummy", suppress_logging=True)
+        sdk_sections = {
+            name for name in dir(dashboard)
+            if not name.startswith("_") and hasattr(getattr(dashboard, name), "_session")
+        }
+        self.assertEqual([], sorted(sdk_sections - set(config.SDK_SECTIONS)))
+        self.assertEqual([], sorted(set(config.SDK_SECTIONS) - sdk_sections))
+
+
 class DependencyLockTests(unittest.TestCase):
     """requirements.txt is the lockfile generated from pyproject.toml; keep them in step."""
 
@@ -749,6 +799,27 @@ class FileCacheRetentionTests(unittest.TestCase):
             old = self._write(directory, "a.json", 5000, age_hours=5000)
             self.assertEqual({"expired": 0, "over_quota": 0}, module.prune_response_cache())
             self.assertTrue(old.exists())
+
+    def test_unwritable_cache_directory_disables_file_caching_instead_of_crashing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as parent:
+            blocker = Path(parent) / "not-a-directory"
+            blocker.write_text("x")
+            with patch.dict(
+                os.environ,
+                {"MERAKI_API_KEY": "dummy", "MAX_RESPONSE_TOKENS": "50",
+                 "RESPONSE_CACHE_DIR": str(blocker / "cache")},
+                clear=True,
+            ), fake_runtime_modules():
+                module = load_script_module("meraki-mcp-dynamic.py", "test_file_cache_unwritable")
+                self.assertFalse(module.ENABLE_FILE_CACHING)
+                rows = [{"serial": f"Q2XX-{i:04d}"} for i in range(200)]
+                module.dashboard.networks = types.SimpleNamespace(getNetworkDevices=lambda networkId: rows)
+                response = json.loads(module._call_meraki_method_internal(
+                    "networks", "getNetworkDevices", {"networkId": "N_1"}))
+                self.assertEqual(rows, response)
+                self.assertFalse(json.loads(asyncio.run(module.get_mcp_config()))["file_caching_enabled"])
 
     def test_saved_response_is_private_and_survives_its_own_prune(self):
         with dynamic_module(

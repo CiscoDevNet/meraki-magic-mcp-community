@@ -5,13 +5,13 @@ Meraki Magic is a Python-based MCP (Model Context Protocol) server for Cisco's M
 ## Two Versions Available
 
 **🚀 Dynamic MCP (Recommended)** - `meraki-mcp-dynamic.py`
-- **~804 API endpoints** automatically exposed
+- **1,000+ API methods** reachable through one generic tool (1,039 with Meraki SDK 4.7)
 - **100% SDK coverage** - all Meraki API methods available
 - **Auto-updates** when you upgrade the Meraki SDK
 - **No manual coding** required for new endpoints
 
 **📋 Manual MCP** - `meraki-mcp.py`
-- **40 curated endpoints** with detailed schemas
+- **83 curated tools** with detailed schemas
 - **Type-safe** with Pydantic validation
 - **Custom business logic** for specific use cases
 - **Clean documentation** for common operations
@@ -259,8 +259,9 @@ docker compose up -d
 The dynamic MCP automatically stays current with Meraki's API:
 
 ```bash
-# Manually update SDK
-pip install --upgrade meraki
+# Update to the SDK version this project is tested with
+git pull
+pip install -r requirements.txt
 ```
 
 Then restart Claude Desktop. See [UPDATE_GUIDE.md](UPDATE_GUIDE.md) for details.
@@ -296,7 +297,7 @@ The Dynamic MCP provides two ways to access Meraki APIs:
    - And 6 more common operations
 
 2. **Generic API caller** (`call_meraki_api`):
-   - Access ALL 804+ Meraki API methods
+   - Access every Meraki SDK method
    - Example: `call_meraki_api(section="appliance", method="getNetworkApplianceFirewallL3FirewallRules", parameters={"networkId": "L_123"})`
    - Destructive methods require `confirm_destructive_action=true` in `parameters`
 

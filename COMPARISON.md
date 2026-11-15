@@ -2,268 +2,130 @@
 
 ## Overview
 
-You now have **TWO versions** of the Meraki MCP server:
+This project ships two MCP servers:
 
 | Feature | Manual (`meraki-mcp.py`) | Dynamic (`meraki-mcp-dynamic.py`) |
 |---------|--------------------------|-----------------------------------|
-| **Tools** | 40 hand-coded endpoints | ~804 auto-generated endpoints |
-| **Coverage** | 0.57% of API | 100% of SDK methods |
-| **Type Safety** | Pydantic schemas | Generic kwargs |
-| **Documentation** | Custom descriptions | Auto-generated |
-| **Maintenance** | Manual updates needed | Auto-updates with SDK |
-| **Custom Logic** | Can add per-endpoint | Generic wrapper |
-| **Error Handling** | Built-in for all | Built-in for all |
-| **Async Support** | Selective | All methods |
+| **MCP tools** | 83 hand-written tools | 22 tools: 12 common operations, `call_meraki_api`, and discovery/cache helpers |
+| **API coverage** | The endpoints those 83 tools wrap | Every method in the Meraki Python SDK (more than 1,000 as of SDK 4.7) |
+| **Type safety** | Pydantic schemas for complex updates | Generic `parameters` object, checked by the SDK |
+| **Documentation** | Hand-written descriptions | SDK docstrings via `get_method_info` |
+| **Maintenance** | Each tool is updated by hand | New SDK methods are available after an SDK upgrade |
+| **Read-only mode** | Yes (`READ_ONLY_MODE`, default on) | Yes (`READ_ONLY_MODE`, default on) |
+| **Destructive confirmation** | Yes | Yes |
+| **Response caching and size limits** | No | Yes |
 | **Transports** | stdio, HTTP, SSE | stdio, HTTP, SSE |
-| **Docker** | Supported | Supported |
+| **Docker** | Supported | Supported (default) |
 
-## What Each Version Includes
+## What each version includes
 
-### Manual MCP (meraki-mcp.py)
+### Manual MCP (`meraki-mcp.py`)
 
-**Organizations** (8 tools)
-- get_organizations
-- get_organization_details
-- get_networks
-- get_devices
-- create_network
-- delete_network
-- get_organization_status
-- get_organization_inventory
-- get_organization_license
+83 curated tools with snake_case names, grouped as:
 
-**Networks** (10 tools)
-- get_network_details
-- get_network_devices
-- update_network (with NetworkUpdateSchema)
-- get_clients
-- get_client_details
-- get_client_usage
-- get_client_policy
-- update_client_policy
-- get_network_traffic
+- **Organization** - organizations, networks, devices, inventory, licenses, configuration changes
+- **Network** - network details and updates, clients, client policies, traffic
+- **Device** - details, updates, claim/remove, reboot, status, uplinks
+- **Wireless** - SSIDs, wireless settings, RF profiles, channel utilization, signal quality
+- **Switch** - ports, VLANs, port statuses, QoS rules, access control lists
+- **Appliance** - security events, VPN, firewall rules, content filtering, traffic shaping
+- **Camera** - video and quality settings, analytics, snapshots, sense
+- **Advanced organization** - admins, API requests, webhook logs, network events and alert settings
+- **Live device tools** - ping, cable test, LED blink, wake-on-LAN
+- **Network automation** - action batches
 
-**Devices** (9 tools)
-- get_device_details
-- update_device (with DeviceUpdateSchema)
-- claim_devices
-- remove_device
-- reboot_device
-- get_device_clients
-- get_device_status
-- get_device_uplink
+The full list with arguments is in [README.md](README.md#manual-mcp-tools-reference).
 
-**Wireless** (4 tools)
-- get_wireless_ssids
-- update_wireless_ssid (with SsidUpdateSchema)
-- get_wireless_settings
-- get_wireless_clients
+### Dynamic MCP (`meraki-mcp-dynamic.py`)
 
-**Switch** (5 tools)
-- get_switch_ports
-- update_switch_port
-- get_switch_vlans
-- create_switch_vlan
+**Pre-registered tools (12)**
+`getOrganizations`, `getOrganizationAdmins`, `getOrganizationNetworks`, `getOrganizationDevices`, `getNetwork`, `getNetworkClients`, `getNetworkEvents`, `getNetworkDevices`, `getDevice`, `getNetworkWirelessSsids`, `getDeviceSwitchPorts`, `updateDeviceSwitchPort`
 
-**Appliance** (4 tools)
-- get_security_center
-- get_vpn_status
-- get_firewall_rules
-- update_firewall_rules (with FirewallRule schema)
+**Generic caller (1)**
+`call_meraki_api(section, method, parameters)` reaches every method in these SDK sections:
 
-**Camera** (2 tools)
-- get_camera_video_settings
-- get_camera_quality_settings
+| Section | Methods (SDK 4.7) |
+|---------|-------------------|
+| organizations | 251 |
+| appliance | 181 |
+| wireless | 157 |
+| networks | 115 |
+| switch | 102 |
+| sm | 49 |
+| camera | 46 |
+| devices | 41 |
+| cellularGateway | 24 |
+| sensor | 19 |
+| campusGateway | 18 |
+| wirelessController | 15 |
+| licensing | 8 |
+| insight | 7 |
+| administered | 4 |
+| spaces | 2 |
 
-### Dynamic MCP (meraki-mcp-dynamic.py)
+Run `python3 inspect_tools.py` or call `list_all_methods` for the counts in your installed SDK.
 
-**All of the above PLUS:**
+**Discovery tools (3)**
+`list_all_methods`, `search_methods`, `get_method_info`
 
-**Additional Organizations** (~164 more tools)
-- Admin management (CRUD)
-- Action batches
-- Adaptive policy ACLs, groups, policies
-- Alert profiles
-- Branding policies
-- Config templates
-- Device migrations
-- Packet capture
-- Early access features
-- Firmware upgrades (staged)
-- Floor plans
-- MQTT brokers
-- SAML/SSO
-- Policy objects
-- SNMP settings
-- Webhooks
-- And much more...
+**Cache and configuration tools (6)**
+`get_mcp_config`, `cache_stats`, `cache_clear`, `get_cached_response`, `list_cached_responses`, `clear_cached_files`
 
-**Additional Networks** (~104 more tools)
-- Events and event types
-- Bluetooth clients
-- Network health metrics
-- Traffic history
-- Configuration changes
-- Meraki auth users
-- Floor plans
-- Bind/unbind templates
-- Split/combine networks
-- And much more...
+## Example use cases
 
-**Additional Wireless** (~101 more tools)
-- RF profiles
-- Air Marshal
-- Bluetooth settings
-- Channel utilization
-- Client connection stats
-- Ethernet ports (wireless APs)
-- Failed connections
-- Identity PSKs
-- Latency stats
-- Mesh status
-- RADIUS servers
-- SSID schedules
-- Traffic analysis
-- And much more...
+### Use the manual MCP when
 
-**Additional Switch** (~96 more tools)
-- Access control lists (ACLs)
-- Access policies
-- Alternate management interface
-- DHCP server settings
-- Link aggregation (LAG)
-- MTU settings
-- Multicast
-- Port schedules
-- QoS rules
-- Routing (static, OSPF)
-- STP settings
-- Storm control
-- Switch stacks
-- Warm spare
-- And much more...
+1. **Setting up a new network** - `create_network`, `get_network_details`, `update_network`
+2. **Basic wireless config** - `get_wireless_ssids`, `update_wireless_ssid`
+3. **Device management basics** - `claim_devices`, `update_device`, `reboot_device`
+4. **Client monitoring** - `get_clients`, `get_client_policy`, `update_client_policy`
 
-**Additional Appliance** (~128 more tools)
-- Content filtering
-- DNS (local/split profiles)
-- All firewall types (L3, L7, cellular, inbound)
-- NAT rules (1:1, 1:Many, port forwarding)
-- Ports configuration
-- Radio settings
-- SD-WAN policies
-- Security (intrusion detection, malware)
-- Static routes
-- Traffic shaping (custom classes, rules, uplink)
-- VLANs management
-- VPN (BGP, site-to-site, third-party)
-- Warm spare
-- And much more...
+### Use the dynamic MCP when
 
-**Additional Camera** (~43 more tools)
-- Analytics (live, overview, recent, zones)
-- Boundaries (areas, lines)
-- Custom analytics artifacts
-- Detection history
-- Onboarding status
-- Permissions
-- Quality retention profiles
-- Roles
-- Schedules
-- Sense (object detection)
-- Snapshot generation
-- Video links
-- Wireless profiles
-- And much more...
-
-**Plus Entirely New Categories:**
-- **Cellular Gateway** (24 tools) - DHCP, eSIM management, LAN, port forwarding, subnet pools
-- **Sensor** (18 tools) - Alert profiles, commands, MQTT, readings, relationships
-- **SM (Systems Manager)** (49 tools) - Mobile device management
-- **Insight** (7 tools) - Application health monitoring
-- **Licensing** (8 tools) - License management (co-term, subscription)
-- **Administered** (4 tools) - Cross-org management
-
-**Helper Tools** (3 tools)
-- list_available_tools
-- search_tools
-- get_tool_info
-
-## Example Use Cases
-
-### Use Manual MCP When:
-
-1. **Setting up a new network**
-   - create_network
-   - get_network_details
-   - update_network
-
-2. **Basic wireless config**
-   - get_wireless_ssids
-   - update_wireless_ssid
-
-3. **Device management basics**
-   - claim_devices
-   - update_device
-   - reboot_device
-
-4. **Client monitoring**
-   - get_clients
-   - get_client_policy
-   - update_client_policy
-
-### Use Dynamic MCP When:
+Each line is a `section` and `method` for `call_meraki_api`.
 
 1. **Advanced wireless optimization**
-   - wireless_getNetworkWirelessRfProfiles
-   - wireless_createNetworkWirelessRfProfile
-   - wireless_getNetworkWirelessChannelUtilizationHistory
-   - wireless_getNetworkWirelessFailedConnections
+   - wireless `getNetworkWirelessRfProfiles`
+   - wireless `createNetworkWirelessRfProfile`
+   - wireless `getNetworkWirelessChannelUtilizationHistory`
+   - wireless `getNetworkWirelessFailedConnections`
 
-2. **Security & compliance**
-   - appliance_getNetworkApplianceFirewallL7FirewallRules
-   - appliance_getNetworkApplianceSecurityIntrusion
-   - organizations_getOrganizationConfigurationChanges
-   - organizations_getOrganizationPiiRequests
+2. **Security and compliance**
+   - appliance `getNetworkApplianceFirewallL7FirewallRules`
+   - appliance `getNetworkApplianceSecurityIntrusion`
+   - organizations `getOrganizationConfigurationChanges`
 
 3. **Troubleshooting**
-   - networks_getNetworkEvents
-   - devices_createDeviceLiveToolsPing
-   - devices_createDeviceLiveToolsCableTest
-   - networks_getNetworkHealthChannelUtilization
+   - networks `getNetworkEvents`
+   - devices `createDeviceLiveToolsPing`
+   - devices `createDeviceLiveToolsCableTest`
 
-4. **Automation & webhooks**
-   - organizations_createOrganizationWebhooksHttpServer
-   - organizations_createOrganizationAlertsProfile
-   - organizations_createOrganizationActionBatch
+4. **Automation and webhooks**
+   - networks `createNetworkWebhooksHttpServer`
+   - organizations `createOrganizationAlertsProfile`
+   - organizations `createOrganizationActionBatch`
 
 5. **Advanced switch management**
-   - switch_createNetworkSwitchStack
-   - switch_getNetworkSwitchAccessPolicies
-   - switch_createNetworkSwitchPortSchedule
-   - switch_getNetworkSwitchQosRules
+   - switch `createNetworkSwitchStack`
+   - switch `getNetworkSwitchAccessPolicies`
+   - switch `createNetworkSwitchPortSchedule`
+   - switch `getNetworkSwitchQosRules`
 
-6. **Licensing & admin**
-   - organizations_getOrganizationAdmins
-   - organizations_createOrganizationAdmin
-   - licensing_getOrganizationLicensingCotermLicenses
+6. **Licensing and admin**
+   - organizations `getOrganizationAdmins`
+   - organizations `createOrganizationAdmin`
+   - licensing `getOrganizationLicensingCotermLicenses`
 
 7. **Camera analytics**
-   - camera_getDeviceCameraAnalyticsLive
-   - camera_getDeviceCameraAnalyticsZones
-   - camera_generateDeviceCameraSnapshot
+   - camera `getDeviceCameraAnalyticsLive`
+   - camera `getDeviceCameraAnalyticsZones`
+   - camera `generateDeviceCameraSnapshot`
 
 ## Recommendation
 
-**Start with Dynamic MCP** to get full API coverage. The manual version is a great reference for how to add:
-- Custom Pydantic schemas for complex updates
-- Specialized error handling
-- Custom business logic
+**Start with the dynamic MCP** for full API coverage with a small tool list. The manual version is a reference for adding:
+- Pydantic schemas for complex updates
+- Tool descriptions written for a specific workflow
+- Custom logic that combines several API calls
 
-You can always extract frequently-used tools from the dynamic version and create curated versions with better schemas and documentation.
-
-## Migration Path
-
-1. **Phase 1**: Use dynamic MCP for everything
-2. **Phase 2**: Identify your 10-20 most-used tools
-3. **Phase 3**: Create curated versions with Pydantic schemas
-4. **Phase 4**: Run both MCPs (curated + dynamic) for best of both worlds
+Both servers can run side by side; see [QUICKSTART.md](QUICKSTART.md#step-2-update-claude-desktop-config).

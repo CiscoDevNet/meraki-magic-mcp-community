@@ -11,6 +11,26 @@ DEFAULT_MERAKI_BASE_URL = "https://api.meraki.com/api/v1"
 DEFAULT_MERAKI_CALLER = "MagicMCP CiscoDevNet"
 CONFIRM_DESTRUCTIVE_ACTION_PARAM = "confirm_destructive_action"
 
+# Meraki SDK sections exposed by the dynamic server and inspected by inspect_tools.py
+SDK_SECTIONS = [
+    'organizations',
+    'networks',
+    'devices',
+    'wireless',
+    'switch',
+    'appliance',
+    'camera',
+    'cellularGateway',
+    'campusGateway',
+    'sensor',
+    'sm',
+    'insight',
+    'licensing',
+    'administered',
+    'spaces',
+    'wirelessController',
+]
+
 READ_ONLY_PREFIXES = ("get", "list")
 
 # Leading verbs of every non-read method in the Meraki SDK that have been reviewed.

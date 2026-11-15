@@ -27,10 +27,10 @@
 ### Quick run examples
 
 ```bash
-# Run the dynamic MCP server (recommended, ~804 endpoints)
+# Run the dynamic MCP server (recommended, full API via call_meraki_api)
 python meraki-mcp-dynamic.py
 
-# Run the manual MCP server (40 curated endpoints)
+# Run the manual MCP server (83 curated tools)
 python meraki-mcp.py
 
 # Run over HTTP transport
