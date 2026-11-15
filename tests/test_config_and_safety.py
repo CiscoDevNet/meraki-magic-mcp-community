@@ -594,6 +594,93 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual("getOrganizationNetworks", module.dashboard.calls[-1]["method"])
 
 
+class ManualServerThreadingTests(unittest.TestCase):
+    def test_every_manual_tool_is_registered_as_async(self):
+        if not fastmcp_available():
+            self.skipTest("mcp is not installed")
+        with patch.dict(os.environ, {"MERAKI_API_KEY": "dummy"}, clear=True), fake_meraki_module():
+            module = load_script_module("meraki-mcp.py", "test_manual_async_tools")
+            tools = module.mcp._tool_manager.list_tools()
+            self.assertGreater(len(tools), 50)
+            blocking = sorted(tool.name for tool in tools if not tool.is_async)
+            self.assertEqual([], blocking)
+
+    def test_sync_tool_runs_off_the_event_loop_thread(self):
+        import threading
+
+        if not fastmcp_available():
+            self.skipTest("mcp is not installed")
+        with patch.dict(os.environ, {"MERAKI_API_KEY": "dummy"}, clear=True), fake_meraki_module():
+            module = load_script_module("meraki-mcp.py", "test_manual_threaded_call")
+            sdk_threads = []
+
+            def get_network(network_id):
+                sdk_threads.append(threading.get_ident())
+                return {"id": network_id}
+
+            module.dashboard.networks.getNetwork = get_network
+
+            async def call():
+                loop_thread = threading.get_ident()
+                result = await module.mcp.call_tool("get_network_details", {"network_id": "N_1"})
+                return loop_thread, result
+
+            loop_thread, result = asyncio.run(call())
+
+        self.assertEqual(1, len(sdk_threads))
+        self.assertNotEqual(loop_thread, sdk_threads[0])
+        self.assertIn("N_1", json.dumps(result, default=str))
+        # The function stays directly callable and synchronous
+        self.assertEqual({"id": "N_2"}, json.loads(module.get_network_details("N_2")))
+
+
+class DynamicServerCacheTests(unittest.TestCase):
+    def test_cache_hit_does_not_modify_the_stored_entry(self):
+        with patch.dict(
+            os.environ, {"MERAKI_API_KEY": "dummy", "ENABLE_FILE_CACHING": "false"}, clear=True
+        ), fake_runtime_modules():
+            module = load_script_module("meraki-mcp-dynamic.py", "test_dynamic_cache_copy")
+            result = {"id": "N_1", "name": "net"}
+            calls = []
+            module.dashboard.networks = types.SimpleNamespace(
+                getNetwork=lambda networkId: calls.append(networkId) or result
+            )
+
+            first = json.loads(module._call_meraki_method_internal("networks", "getNetwork", {"networkId": "N_1"}))
+            second = json.loads(module._call_meraki_method_internal("networks", "getNetwork", {"networkId": "N_1"}))
+            third = json.loads(module._call_meraki_method_internal("networks", "getNetwork", {"networkId": "N_1"}))
+
+            self.assertEqual(["N_1"], calls)
+            self.assertEqual({"id": "N_1", "name": "net"}, first)
+            self.assertEqual({"id": "N_1", "name": "net", "_from_cache": True}, second)
+            self.assertEqual(second, third)
+            self.assertEqual({"id": "N_1", "name": "net"}, result)
+            self.assertEqual([{"id": "N_1", "name": "net"}], list(module.cache.cache.values()))
+
+    def test_pagination_notice_does_not_modify_the_sdk_result(self):
+        with patch.dict(
+            os.environ, {"MERAKI_API_KEY": "dummy", "ENABLE_FILE_CACHING": "false"}, clear=True
+        ), fake_runtime_modules():
+            module = load_script_module("meraki-mcp-dynamic.py", "test_dynamic_pagination_copy")
+            result = {"items": [1, 2, 3]}
+            seen = []
+            module.dashboard.networks = types.SimpleNamespace(
+                getNetworkEvents=lambda networkId, perPage: seen.append(perPage) or result
+            )
+
+            response = json.loads(module._call_meraki_method_internal(
+                "networks", "getNetworkEvents", {"networkId": "N_1", "perPage": 5000}))
+            cached = json.loads(module._call_meraki_method_internal(
+                "networks", "getNetworkEvents", {"networkId": "N_1", "perPage": 5000}))
+
+            self.assertEqual([module.MAX_PER_PAGE], seen)
+            self.assertTrue(response["_pagination_limited"])
+            self.assertEqual([1, 2, 3], response["items"])
+            self.assertTrue(cached["_pagination_limited"])
+            self.assertTrue(cached["_from_cache"])
+            self.assertEqual({"items": [1, 2, 3]}, result)
+
+
 class ManualServerSdkCompatibilityTests(unittest.TestCase):
     def test_every_manual_tool_calls_a_method_the_installed_sdk_provides(self):
         import re

@@ -69,6 +69,18 @@ def to_async(func: Callable) -> Callable:
         return await asyncio.to_thread(func, *args, **kwargs)
     return wrapper
 
+def threaded_tool(func: Callable) -> Callable:
+    """
+    Register a synchronous function as an MCP tool that runs in a worker thread.
+
+    FastMCP calls synchronous tools directly on the event loop, so a slow Meraki
+    request would stall every other client of the HTTP transports. The registered
+    tool keeps the function's name, docstring and signature; the function itself
+    is returned unchanged so it can still be called directly.
+    """
+    mcp.tool()(to_async(func))
+    return func
+
 def _build_kwargs(**params) -> dict:
     """Return only non-None keyword arguments. Correctly handles False and 0."""
     return {k: v for k, v in params.items() if v is not None}
@@ -261,7 +273,7 @@ async def get_devices(org_id: Optional[str] = None) -> str:
     return json.dumps(devices, indent=2)
 
 # Create network in Meraki
-@mcp.tool()
+@threaded_tool
 def create_network(name: str, tags: list[str], productTypes: list[str], org_id: Optional[str] = None, copyFromNetworkId: Optional[str] = None) -> str:
     """Create a new network in Meraki, optionally copying from another network."""
     blocked = _guard_write("createOrganizationNetwork")
@@ -275,7 +287,7 @@ def create_network(name: str, tags: list[str], productTypes: list[str], org_id: 
     return json.dumps(network, indent=2)
 
 # Delete network in Meraki
-@mcp.tool()
+@threaded_tool
 def delete_network(network_id: str, confirm_destructive_action: bool = False) -> str:
     """Delete a network in Meraki."""
     blocked = _guard_write("deleteNetwork", confirm_destructive_action)
@@ -285,7 +297,7 @@ def delete_network(network_id: str, confirm_destructive_action: bool = False) ->
     return f"Network {network_id} deleted"
 
 # Get organization status
-@mcp.tool()
+@threaded_tool
 def get_organization_status(org_id: Optional[str] = None) -> str:
     """Get the status and health of an organization (device counts by status and product type)"""
     organization_id = org_id or MERAKI_ORG_ID
@@ -293,7 +305,7 @@ def get_organization_status(org_id: Optional[str] = None) -> str:
     return json.dumps(status, indent=2)
 
 # Get organization inventory
-@mcp.tool()
+@threaded_tool
 def get_organization_inventory(org_id: Optional[str] = None) -> str:
     """Get the inventory for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
@@ -301,7 +313,7 @@ def get_organization_inventory(org_id: Optional[str] = None) -> str:
     return json.dumps(inventory, indent=2)
 
 # Get organization license state
-@mcp.tool()
+@threaded_tool
 def get_organization_license(org_id: Optional[str] = None) -> str:
     """Get the license state for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
@@ -309,7 +321,7 @@ def get_organization_license(org_id: Optional[str] = None) -> str:
     return json.dumps(license_state, indent=2)
 
 # Get organization configuration changes
-@mcp.tool()
+@threaded_tool
 def get_organization_conf_change(org_id: Optional[str] = None) -> str:
     """Get the org change state for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
@@ -321,21 +333,21 @@ def get_organization_conf_change(org_id: Optional[str] = None) -> str:
 #######################
 
 # Get network details
-@mcp.tool()
+@threaded_tool
 def get_network_details(network_id: str) -> str:
     """Get details for a specific network"""
     network = dashboard.networks.getNetwork(network_id)
     return json.dumps(network, indent=2)
 
 # Get network devices
-@mcp.tool()
+@threaded_tool
 def get_network_devices(network_id: str) -> str:
     """Get a list of devices in a specific network"""
     devices = dashboard.networks.getNetworkDevices(network_id)
     return json.dumps(devices, indent=2)
 
 # Update network
-@mcp.tool()
+@threaded_tool
 def update_network(network_id: str, update_data: NetworkUpdateSchema) -> str:
     """
     Update a network's properties using a schema-validated model
@@ -355,7 +367,7 @@ def update_network(network_id: str, update_data: NetworkUpdateSchema) -> str:
     return json.dumps(result, indent=2)
 
 # Get clients from Meraki
-@mcp.tool()
+@threaded_tool
 def get_clients(network_id: str, timespan: int = 86400, statuses: Optional[str] = None) -> str:
     """
     Get a list of clients from a specific Meraki network (auto-paginates).
@@ -375,14 +387,14 @@ def get_clients(network_id: str, timespan: int = 86400, statuses: Optional[str] 
     return json.dumps(clients, indent=2)
 
 # Get client details
-@mcp.tool()
+@threaded_tool
 def get_client_details(network_id: str, client_id: str) -> str:
     """Get details for a specific client in a network"""
     client = dashboard.networks.getNetworkClient(network_id, client_id)
     return json.dumps(client, indent=2)
 
 # Get client usage history
-@mcp.tool()
+@threaded_tool
 def get_client_usage(network_id: str, client_id: str) -> str:
     """Get the usage history for a client"""
     usage = dashboard.networks.getNetworkClientUsageHistory(network_id, client_id)
@@ -407,7 +419,7 @@ async def get_client_policy(network_id: str, client_id: str) -> str:
     return json.dumps(policy, indent=2)
 
 # Update client policy
-@mcp.tool()
+@threaded_tool
 def update_client_policy(network_id: str, client_id: str, device_policy: str, group_policy_id: Optional[str] = None) -> str:
     """Update policy for a client"""
     blocked = _guard_write("updateNetworkClientPolicy")
@@ -421,7 +433,7 @@ def update_client_policy(network_id: str, client_id: str, device_policy: str, gr
     return json.dumps(result, indent=2)
 
 # Get network traffic analysis
-@mcp.tool()
+@threaded_tool
 def get_network_traffic(network_id: str, timespan: int = 86400) -> str:
     """Get traffic analysis data for a network"""
     traffic = dashboard.networks.getNetworkTraffic(network_id, timespan=timespan)
@@ -471,7 +483,7 @@ async def update_device(serial: str, device_settings: DeviceUpdateSchema) -> str
     }, indent=2)
 
 # Claim devices into the Meraki organization
-@mcp.tool()
+@threaded_tool
 def claim_devices(network_id: str, serials: list[str]) -> str:
     """Claim one or more devices into a Meraki network"""
     blocked = _guard_write("claimNetworkDevices")
@@ -481,7 +493,7 @@ def claim_devices(network_id: str, serials: list[str]) -> str:
     return f"Devices {serials} claimed into network {network_id}"
 
 # Remove device from network
-@mcp.tool()
+@threaded_tool
 def remove_device(network_id: str, serial: str, confirm_destructive_action: bool = False) -> str:
     """Remove a device from a network"""
     blocked = _guard_write("removeNetworkDevices", confirm_destructive_action)
@@ -491,7 +503,7 @@ def remove_device(network_id: str, serial: str, confirm_destructive_action: bool
     return f"Device {serial} removed from network {network_id}"
 
 # Reboot device
-@mcp.tool()
+@threaded_tool
 def reboot_device(serial: str) -> str:
     """Reboot a device"""
     blocked = _guard_write("rebootDevice")
@@ -501,14 +513,14 @@ def reboot_device(serial: str) -> str:
     return json.dumps(result, indent=2)
 
 # Get device clients
-@mcp.tool()
+@threaded_tool
 def get_device_clients(serial: str, timespan: int = 86400) -> str:
     """Get clients connected to a specific device"""
     clients = dashboard.devices.getDeviceClients(serial, timespan=timespan)
     return json.dumps(clients, indent=2)
 
 # Get device status
-@mcp.tool()
+@threaded_tool
 def get_device_status(serial: str, org_id: Optional[str] = None) -> str:
     """Get the current status of a device (online/offline/alerting, IPs, last reported time)"""
     organization_id = _organization_id_for_device(serial, org_id)
@@ -518,7 +530,7 @@ def get_device_status(serial: str, org_id: Optional[str] = None) -> str:
     return _single_device_result(statuses, serial, "No status found for this device in the organization")
 
 # Get device uplink status
-@mcp.tool()
+@threaded_tool
 def get_device_uplink(serial: str, org_id: Optional[str] = None) -> str:
     """Get the uplink status of a device. Only MX, MG and Z series devices report uplinks."""
     organization_id = _organization_id_for_device(serial, org_id)
@@ -565,7 +577,7 @@ async def update_wireless_ssid(network_id: str, ssid_number: str, ssid_settings:
     return json.dumps(result, indent=2)
 
 # Get wireless settings
-@mcp.tool()
+@threaded_tool
 def get_wireless_settings(network_id: str) -> str:
     """Get wireless settings for a network"""
     settings = dashboard.wireless.getNetworkWirelessSettings(network_id)
@@ -578,14 +590,14 @@ def get_wireless_settings(network_id: str) -> str:
 #######################
 
 # Get switch ports
-@mcp.tool()
+@threaded_tool
 def get_switch_ports(serial: str) -> str:
     """Get ports for a switch"""
     ports = dashboard.switch.getDeviceSwitchPorts(serial)
     return json.dumps(ports, indent=2)
 
 # Update switch port
-@mcp.tool()
+@threaded_tool
 def update_switch_port(serial: str, port_id: str, name: Optional[str] = None, tags: Optional[list[str]] = None, enabled: Optional[bool] = None, vlan: Optional[int] = None) -> str:
     """Update a switch port"""
     blocked = _guard_write("updateDeviceSwitchPort")
@@ -596,14 +608,14 @@ def update_switch_port(serial: str, port_id: str, name: Optional[str] = None, ta
     return json.dumps(result, indent=2)
 
 # Get VLANs (the Meraki API defines VLANs on the network's MX security appliance)
-@mcp.tool()
+@threaded_tool
 def get_switch_vlans(network_id: str) -> str:
     """Get VLANs for a network. VLANs are defined on the network's MX security appliance and must be enabled there."""
     vlans = dashboard.appliance.getNetworkApplianceVlans(network_id)
     return json.dumps(vlans, indent=2)
 
 # Create switch VLAN
-@mcp.tool()
+@threaded_tool
 def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: Optional[str] = None, appliance_ip: Optional[str] = None) -> str:
     """Create a VLAN on the network's MX security appliance. VLANs must be enabled on the appliance."""
     blocked = _guard_write("createNetworkApplianceVlan")
@@ -623,7 +635,7 @@ def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: Optiona
 #######################
 
 # Get security center
-@mcp.tool()
+@threaded_tool
 def get_security_center(network_id: str, timespan: int = 86400, per_page: int = 100) -> str:
     """Get recent security events (IDS/IPS and malware) for a network.
 
@@ -638,21 +650,21 @@ def get_security_center(network_id: str, timespan: int = 86400, per_page: int = 
     return json.dumps(security, indent=2)
 
 # Get VPN status
-@mcp.tool()
+@threaded_tool
 def get_vpn_status(network_id: str) -> str:
     """Get VPN status for a network"""
     vpn_status = dashboard.appliance.getNetworkApplianceVpnSiteToSiteVpn(network_id)
     return json.dumps(vpn_status, indent=2)
 
 # Get firewall rules
-@mcp.tool()
+@threaded_tool
 def get_firewall_rules(network_id: str) -> str:
     """Get firewall rules for a network"""
     rules = dashboard.appliance.getNetworkApplianceFirewallL3FirewallRules(network_id)
     return json.dumps(rules, indent=2)
 
 # Update firewall rules
-@mcp.tool()
+@threaded_tool
 def update_firewall_rules(network_id: str, rules: List[FirewallRule]) -> str:
     """
     Update firewall rules for a network using schema-validated models
@@ -679,14 +691,14 @@ def update_firewall_rules(network_id: str, rules: List[FirewallRule]) -> str:
 #######################
 
 # Get camera video settings
-@mcp.tool()
+@threaded_tool
 def get_camera_video_settings(serial: str) -> str:
     """Get video settings for a camera"""
     settings = dashboard.camera.getDeviceCameraVideoSettings(serial)
     return json.dumps(settings, indent=2)
 
 # Get camera quality and retention settings
-@mcp.tool()
+@threaded_tool
 def get_camera_quality_settings(network_id: str) -> str:
     """Get quality and retention settings for cameras in a network"""
     settings = dashboard.camera.getNetworkCameraQualityRetentionProfiles(network_id)
@@ -697,7 +709,7 @@ def get_camera_quality_settings(network_id: str) -> str:
 #######################
 
 # Get organization admins
-@mcp.tool()
+@threaded_tool
 def get_organization_admins(org_id: Optional[str] = None) -> str:
     """Get a list of organization admins"""
     organization_id = org_id or MERAKI_ORG_ID
@@ -705,7 +717,7 @@ def get_organization_admins(org_id: Optional[str] = None) -> str:
     return json.dumps(admins, indent=2)
 
 # Create organization admin
-@mcp.tool()
+@threaded_tool
 def create_organization_admin(org_id: str, email: str, name: str, org_access: str, tags: Optional[list[str]] = None, networks: Optional[list[dict]] = None) -> str:
     """Create a new organization admin"""
     blocked = _guard_write("createOrganizationAdmin")
@@ -726,7 +738,7 @@ def create_organization_admin(org_id: str, email: str, name: str, org_access: st
     return json.dumps(result, indent=2)
 
 # Get organization API requests
-@mcp.tool()
+@threaded_tool
 def get_organization_api_requests(org_id: Optional[str] = None, timespan: int = 86400) -> str:
     """Get organization API request history"""
     organization_id = org_id or MERAKI_ORG_ID
@@ -734,7 +746,7 @@ def get_organization_api_requests(org_id: Optional[str] = None, timespan: int = 
     return json.dumps(requests, indent=2)
 
 # Get organization webhook logs
-@mcp.tool()
+@threaded_tool
 def get_organization_webhook_logs(org_id: Optional[str] = None, timespan: int = 86400) -> str:
     """Get organization webhook logs"""
     organization_id = org_id or MERAKI_ORG_ID
@@ -746,35 +758,35 @@ def get_organization_webhook_logs(org_id: Optional[str] = None, timespan: int = 
 #######################
 
 # Get network events
-@mcp.tool()
+@threaded_tool
 def get_network_events(network_id: str, timespan: int = 86400, per_page: int = 1000) -> str:
     """Get network events history (auto-paginates)"""
     events = dashboard.networks.getNetworkEvents(network_id, total_pages='all', timespan=timespan, perPage=per_page)
     return json.dumps(events, indent=2)
 
 # Get network event types
-@mcp.tool()
+@threaded_tool
 def get_network_event_types(network_id: str) -> str:
     """Get available network event types"""
     event_types = dashboard.networks.getNetworkEventsEventTypes(network_id)
     return json.dumps(event_types, indent=2)
 
 # Get network alerts history
-@mcp.tool()
+@threaded_tool
 def get_network_alerts_history(network_id: str, timespan: int = 86400) -> str:
     """Get network alerts history"""
     alerts = dashboard.networks.getNetworkAlertsHistory(network_id, timespan=timespan)
     return json.dumps(alerts, indent=2)
 
 # Get network alerts settings
-@mcp.tool()
+@threaded_tool
 def get_network_alerts_settings(network_id: str) -> str:
     """Get network alerts settings"""
     settings = dashboard.networks.getNetworkAlertsSettings(network_id)
     return json.dumps(settings, indent=2)
 
 # Update network alerts settings
-@mcp.tool()
+@threaded_tool
 def update_network_alerts_settings(network_id: str, defaultDestinations: Optional[dict] = None, alerts: Optional[list[dict]] = None) -> str:
     """Update network alerts settings"""
     blocked = _guard_write("updateNetworkAlertsSettings")
@@ -794,7 +806,7 @@ def update_network_alerts_settings(network_id: str, defaultDestinations: Optiona
 #######################
 
 # Ping device
-@mcp.tool()
+@threaded_tool
 def ping_device(serial: str, target_ip: str, count: int = 5) -> str:
     """Ping a device from another device"""
     blocked = _guard_write("createDeviceLiveToolsPing")
@@ -804,14 +816,14 @@ def ping_device(serial: str, target_ip: str, count: int = 5) -> str:
     return json.dumps(result, indent=2)
 
 # Get ping results
-@mcp.tool()
+@threaded_tool
 def get_device_ping_results(serial: str, ping_id: str) -> str:
     """Get results from a device ping test"""
     result = dashboard.devices.getDeviceLiveToolsPing(serial, ping_id)
     return json.dumps(result, indent=2)
 
 # Cable test device
-@mcp.tool()
+@threaded_tool
 def cable_test_device(serial: str, ports: list[str]) -> str:
     """Run cable test on device ports"""
     blocked = _guard_write("createDeviceLiveToolsCableTest")
@@ -821,14 +833,14 @@ def cable_test_device(serial: str, ports: list[str]) -> str:
     return json.dumps(result, indent=2)
 
 # Get cable test results
-@mcp.tool()
+@threaded_tool
 def get_device_cable_test_results(serial: str, cable_test_id: str) -> str:
     """Get results from a device cable test"""
     result = dashboard.devices.getDeviceLiveToolsCableTest(serial, cable_test_id)
     return json.dumps(result, indent=2)
 
 # Blink device LEDs
-@mcp.tool()
+@threaded_tool
 def blink_device_leds(serial: str, duration: int = 5) -> str:
     """Blink device LEDs for identification"""
     blocked = _guard_write("blinkDeviceLeds")
@@ -838,7 +850,7 @@ def blink_device_leds(serial: str, duration: int = 5) -> str:
     return json.dumps(result, indent=2)
 
 # Wake on LAN
-@mcp.tool()
+@threaded_tool
 def wake_on_lan_device(serial: str, mac: str) -> str:
     """Send wake-on-LAN packet to a device"""
     blocked = _guard_write("createDeviceLiveToolsWakeOnLan")
@@ -852,14 +864,14 @@ def wake_on_lan_device(serial: str, mac: str) -> str:
 #######################
 
 # Get wireless RF profiles
-@mcp.tool()
+@threaded_tool
 def get_wireless_rf_profiles(network_id: str) -> str:
     """Get wireless RF profiles for a network"""
     profiles = dashboard.wireless.getNetworkWirelessRfProfiles(network_id)
     return json.dumps(profiles, indent=2)
 
 # Create wireless RF profile
-@mcp.tool()
+@threaded_tool
 def create_wireless_rf_profile(network_id: str, name: str, band_selection_type: str, **kwargs) -> str:
     """Create a wireless RF profile"""
     blocked = _guard_write("createNetworkWirelessRfProfile")
@@ -869,28 +881,28 @@ def create_wireless_rf_profile(network_id: str, name: str, band_selection_type: 
     return json.dumps(result, indent=2)
 
 # Get wireless channel utilization
-@mcp.tool()
+@threaded_tool
 def get_wireless_channel_utilization(network_id: str, timespan: int = 86400) -> str:
     """Get wireless channel utilization history"""
     utilization = dashboard.wireless.getNetworkWirelessChannelUtilizationHistory(network_id, timespan=timespan)
     return json.dumps(utilization, indent=2)
 
 # Get wireless signal quality
-@mcp.tool()
+@threaded_tool
 def get_wireless_signal_quality(network_id: str, timespan: int = 86400) -> str:
     """Get wireless signal quality history"""
     quality = dashboard.wireless.getNetworkWirelessSignalQualityHistory(network_id, timespan=timespan)
     return json.dumps(quality, indent=2)
 
 # Get wireless connection stats
-@mcp.tool()
+@threaded_tool
 def get_wireless_connection_stats(network_id: str, timespan: int = 86400) -> str:
     """Get wireless connection statistics"""
     stats = dashboard.wireless.getNetworkWirelessConnectionStats(network_id, timespan=timespan)
     return json.dumps(stats, indent=2)
 
 # Get wireless client connectivity events
-@mcp.tool()
+@threaded_tool
 def get_wireless_client_connectivity_events(network_id: str, client_id: str, timespan: int = 86400) -> str:
     """Get wireless client connectivity events"""
     events = dashboard.wireless.getNetworkWirelessClientConnectivityEvents(network_id, client_id, timespan=timespan)
@@ -901,14 +913,14 @@ def get_wireless_client_connectivity_events(network_id: str, client_id: str, tim
 #######################
 
 # Get switch port statuses
-@mcp.tool()
+@threaded_tool
 def get_switch_port_statuses(serial: str) -> str:
     """Get switch port statuses"""
     statuses = dashboard.switch.getDeviceSwitchPortsStatuses(serial)
     return json.dumps(statuses, indent=2)
 
 # Cycle switch ports
-@mcp.tool()
+@threaded_tool
 def cycle_switch_ports(serial: str, ports: list[str]) -> str:
     """Cycle (restart) switch ports"""
     blocked = _guard_write("cycleDeviceSwitchPorts")
@@ -918,14 +930,14 @@ def cycle_switch_ports(serial: str, ports: list[str]) -> str:
     return json.dumps(result, indent=2)
 
 # Get switch access control lists
-@mcp.tool()
+@threaded_tool
 def get_switch_access_control_lists(network_id: str) -> str:
     """Get switch access control lists"""
     acls = dashboard.switch.getNetworkSwitchAccessControlLists(network_id)
     return json.dumps(acls, indent=2)
 
 # Update switch access control lists
-@mcp.tool()
+@threaded_tool
 def update_switch_access_control_lists(network_id: str, rules: list[dict]) -> str:
     """Update switch access control lists"""
     blocked = _guard_write("updateNetworkSwitchAccessControlLists")
@@ -935,14 +947,14 @@ def update_switch_access_control_lists(network_id: str, rules: list[dict]) -> st
     return json.dumps(result, indent=2)
 
 # Get switch QoS rules
-@mcp.tool()
+@threaded_tool
 def get_switch_qos_rules(network_id: str) -> str:
     """Get switch QoS rules"""
     rules = dashboard.switch.getNetworkSwitchQosRules(network_id)
     return json.dumps(rules, indent=2)
 
 # Create switch QoS rule
-@mcp.tool()
+@threaded_tool
 def create_switch_qos_rule(network_id: str, vlan: int, protocol: str, src_port: int, src_port_range: Optional[str] = None, dst_port: Optional[int] = None, dst_port_range: Optional[str] = None, dscp: Optional[int] = None) -> str:
     """Create a switch QoS rule"""
     blocked = _guard_write("createNetworkSwitchQosRule")
@@ -967,14 +979,14 @@ def create_switch_qos_rule(network_id: str, vlan: int, protocol: str, src_port: 
 #######################
 
 # Get appliance VPN site-to-site status
-@mcp.tool()
+@threaded_tool
 def get_appliance_vpn_site_to_site(network_id: str) -> str:
     """Get appliance VPN site-to-site configuration"""
     vpn = dashboard.appliance.getNetworkApplianceVpnSiteToSiteVpn(network_id)
     return json.dumps(vpn, indent=2)
 
 # Update appliance VPN site-to-site
-@mcp.tool()
+@threaded_tool
 def update_appliance_vpn_site_to_site(network_id: str, mode: str, hubs: Optional[list[dict]] = None, subnets: Optional[list[dict]] = None) -> str:
     """Update appliance VPN site-to-site configuration"""
     blocked = _guard_write("updateNetworkApplianceVpnSiteToSiteVpn")
@@ -985,14 +997,14 @@ def update_appliance_vpn_site_to_site(network_id: str, mode: str, hubs: Optional
     return json.dumps(result, indent=2)
 
 # Get appliance content filtering
-@mcp.tool()
+@threaded_tool
 def get_appliance_content_filtering(network_id: str) -> str:
     """Get appliance content filtering settings"""
     filtering = dashboard.appliance.getNetworkApplianceContentFiltering(network_id)
     return json.dumps(filtering, indent=2)
 
 # Update appliance content filtering
-@mcp.tool()
+@threaded_tool
 def update_appliance_content_filtering(network_id: str, allowed_urls: Optional[list[str]] = None, blocked_urls: Optional[list[str]] = None, blocked_url_patterns: Optional[list[str]] = None, youtube_restricted_for_teenagers: Optional[bool] = None, youtube_restricted_for_mature: Optional[bool] = None) -> str:
     """Update appliance content filtering settings"""
     blocked = _guard_write("updateNetworkApplianceContentFiltering")
@@ -1014,21 +1026,21 @@ def update_appliance_content_filtering(network_id: str, allowed_urls: Optional[l
     return json.dumps(result, indent=2)
 
 # Get appliance security events
-@mcp.tool()
+@threaded_tool
 def get_appliance_security_events(network_id: str, timespan: int = 86400) -> str:
     """Get appliance security events"""
     events = dashboard.appliance.getNetworkApplianceSecurityEvents(network_id, timespan=timespan)
     return json.dumps(events, indent=2)
 
 # Get appliance traffic shaping
-@mcp.tool()
+@threaded_tool
 def get_appliance_traffic_shaping(network_id: str) -> str:
     """Get appliance traffic shaping settings"""
     shaping = dashboard.appliance.getNetworkApplianceTrafficShaping(network_id)
     return json.dumps(shaping, indent=2)
 
 # Update appliance traffic shaping
-@mcp.tool()
+@threaded_tool
 def update_appliance_traffic_shaping(network_id: str, global_bandwidth_limits: Optional[dict] = None) -> str:
     """Update appliance traffic shaping settings"""
     blocked = _guard_write("updateNetworkApplianceTrafficShaping")
@@ -1046,28 +1058,28 @@ def update_appliance_traffic_shaping(network_id: str, global_bandwidth_limits: O
 #######################
 
 # Get camera analytics live
-@mcp.tool()
+@threaded_tool
 def get_camera_analytics_live(serial: str) -> str:
     """Get live camera analytics"""
     analytics = dashboard.camera.getDeviceCameraAnalyticsLive(serial)
     return json.dumps(analytics, indent=2)
 
 # Get camera analytics overview
-@mcp.tool()
+@threaded_tool
 def get_camera_analytics_overview(serial: str, timespan: int = 86400) -> str:
     """Get camera analytics overview"""
     overview = dashboard.camera.getDeviceCameraAnalyticsOverview(serial, timespan=timespan)
     return json.dumps(overview, indent=2)
 
 # Get camera analytics zones
-@mcp.tool()
+@threaded_tool
 def get_camera_analytics_zones(serial: str) -> str:
     """Get camera analytics zones"""
     zones = dashboard.camera.getDeviceCameraAnalyticsZones(serial)
     return json.dumps(zones, indent=2)
 
 # Generate camera snapshot
-@mcp.tool()
+@threaded_tool
 def generate_camera_snapshot(serial: str, timestamp: Optional[str] = None) -> str:
     """Generate a camera snapshot"""
     blocked = _guard_write("generateDeviceCameraSnapshot")
@@ -1081,14 +1093,14 @@ def generate_camera_snapshot(serial: str, timestamp: Optional[str] = None) -> st
     return json.dumps(result, indent=2)
 
 # Get camera sense
-@mcp.tool()
+@threaded_tool
 def get_camera_sense(serial: str) -> str:
     """Get camera sense configuration"""
     sense = dashboard.camera.getDeviceCameraSense(serial)
     return json.dumps(sense, indent=2)
 
 # Update camera sense
-@mcp.tool()
+@threaded_tool
 def update_camera_sense(serial: str, sense_enabled: Optional[bool] = None, mqtt_broker_id: Optional[str] = None, audio_detection: Optional[dict] = None) -> str:
     """Update camera sense configuration"""
     blocked = _guard_write("updateDeviceCameraSense")
@@ -1110,7 +1122,7 @@ def update_camera_sense(serial: str, sense_enabled: Optional[bool] = None, mqtt_
 #######################
 
 # Create action batch
-@mcp.tool()
+@threaded_tool
 def create_action_batch(org_id: str, actions: list[dict], confirmed: bool = True, synchronous: bool = False) -> str:
     """Create an action batch for bulk operations"""
     blocked = _guard_write("createOrganizationActionBatch")
@@ -1121,7 +1133,7 @@ def create_action_batch(org_id: str, actions: list[dict], confirmed: bool = True
     return json.dumps(result, indent=2)
 
 # Get action batch status
-@mcp.tool()
+@threaded_tool
 def get_action_batch_status(org_id: str, batch_id: str) -> str:
     """Get action batch status"""
     organization_id = org_id or MERAKI_ORG_ID
@@ -1129,7 +1141,7 @@ def get_action_batch_status(org_id: str, batch_id: str) -> str:
     return json.dumps(status, indent=2)
 
 # Get action batches
-@mcp.tool()
+@threaded_tool
 def get_action_batches(org_id: Optional[str] = None) -> str:
     """Get all action batches for an organization"""
     organization_id = org_id or MERAKI_ORG_ID

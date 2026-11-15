@@ -405,8 +405,9 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
             cache_key = create_cache_key(section, method, params)
             cached = cache.get(cache_key)
             if cached is not None:
+                # Annotate a copy so the stored entry is never modified
                 if isinstance(cached, dict):
-                    cached['_from_cache'] = True
+                    cached = {**cached, '_from_cache': True}
                 return json.dumps(cached, indent=2)
 
         # Call the method
@@ -442,8 +443,12 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
         # Normal response (small enough)
         response_data = result
         if pagination_limited and isinstance(response_data, dict):
-            response_data["_pagination_limited"] = True
-            response_data["_pagination_message"] = f"Request modified: pagination limited to {MAX_PER_PAGE} items per page"
+            # Annotate a copy so the SDK's result object is never modified
+            response_data = {
+                **response_data,
+                "_pagination_limited": True,
+                "_pagination_message": f"Request modified: pagination limited to {MAX_PER_PAGE} items per page",
+            }
 
         # Cache read results
         if ENABLE_CACHING and is_read:
