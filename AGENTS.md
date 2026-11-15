@@ -35,6 +35,12 @@ docker compose up -d
 
 ## Testing instructions
 
+- **Run the unit tests** (no Meraki credentials needed; CI runs the same command on every pull request):
+
+  ```bash
+  python -m unittest discover -s tests -v
+  ```
+
 - **MCP server links**
 
   This project is an MCP server built with [FastMCP](https://github.com/jlowin/fastmcp) and the [Meraki Python SDK](https://github.com/meraki/dashboard-api-python).
