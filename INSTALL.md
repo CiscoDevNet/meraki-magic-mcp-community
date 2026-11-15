@@ -111,7 +111,7 @@ export MERAKI_PYTHON_SDK_CALLER="MagicMCP CiscoDevNet"
 export READ_ONLY_MODE=true
 ```
 
-Optional tuning: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`.
+Optional tuning: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `CACHE_MAX_ITEMS`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`, `RESPONSE_CACHE_MAX_AGE_HOURS`, `RESPONSE_CACHE_MAX_MB`.
 
 `READ_ONLY_MODE` defaults to `true`. Set it to `false` only when you intend to make changes. Delete/remove calls also require `confirm_destructive_action=true`.
 

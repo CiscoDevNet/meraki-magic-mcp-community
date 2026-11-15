@@ -28,6 +28,7 @@ The dynamic MCP (`meraki-mcp-dynamic.py`) now includes several performance and s
 # In MCP client env or process environment
 ENABLE_CACHING=true          # Enable/disable caching
 CACHE_TTL_SECONDS=300        # 5 minutes (adjust as needed)
+CACHE_MAX_ITEMS=500          # Max in-memory entries; oldest are evicted first (0 = unlimited)
 ```
 
 ### Example:
@@ -182,7 +183,11 @@ ENABLE_FILE_CACHING=true         # Enable file caching (default: true)
 MAX_RESPONSE_TOKENS=5000         # Max tokens before truncation (default: 5000)
 MAX_PER_PAGE=100                 # Max items per page (default: 100)
 RESPONSE_CACHE_DIR=.meraki_cache # Cache directory (default: .meraki_cache)
+RESPONSE_CACHE_MAX_AGE_HOURS=24  # Delete cached files older than this (default: 24, 0 = keep)
+RESPONSE_CACHE_MAX_MB=100        # Cap on total size of cached files (default: 100, 0 = no cap)
 ```
+
+Cached files are pruned automatically at startup and after each new file is written: files older than `RESPONSE_CACHE_MAX_AGE_HOURS` are deleted, then the oldest files until the directory is within `RESPONSE_CACHE_MAX_MB`. Files are created with owner-only permissions because responses can contain sensitive configuration such as pre-shared keys.
 
 Tool responses are returned as compact JSON (no indentation), which uses roughly 40% fewer tokens than pretty-printed output on typical list responses. `MAX_RESPONSE_TOKENS` is measured against that same compact text. Cached files on disk remain indented for reading with `jq` or an editor.
 

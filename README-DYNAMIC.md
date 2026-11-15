@@ -79,8 +79,8 @@ export READ_ONLY_MODE=true
 
 Discovery tools to find and use any API method:
 
-1. **list_all_methods** - Browse all 804+ methods (optionally by section)
-2. **search_methods** - Search for methods by keyword
+1. **list_all_methods** - Method counts per section, or the methods of one section when `section` is given
+2. **search_methods** - Search for methods by keyword (multiple terms must all match; optional `section` and `limit`, default 50 results)
 3. **get_method_info** - Get parameter details for any method
 4. **get_mcp_config** - View MCP configuration
 5. **cache_stats** - View caching statistics

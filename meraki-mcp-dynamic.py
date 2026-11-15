@@ -11,6 +11,7 @@ import functools
 import inspect
 import hashlib
 import threading
+import time
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -51,6 +52,7 @@ if not MERAKI_API_KEY:
 
 ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "300"))  # 5 minutes default
+CACHE_MAX_ITEMS = int(os.getenv("CACHE_MAX_ITEMS", "500"))  # In-memory entries; 0 = unlimited
 READ_ONLY_MODE = get_read_only_mode()
 
 # Response size management (new)
@@ -61,13 +63,18 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _raw_cache_dir = os.getenv("RESPONSE_CACHE_DIR", ".meraki_cache")
 RESPONSE_CACHE_DIR = str(Path(_raw_cache_dir) if Path(_raw_cache_dir).is_absolute() else _SCRIPT_DIR / _raw_cache_dir)
 
+# Retention for cached response files; 0 disables the respective limit
+RESPONSE_CACHE_MAX_AGE_HOURS = float(os.getenv("RESPONSE_CACHE_MAX_AGE_HOURS", "24"))
+RESPONSE_CACHE_MAX_MB = float(os.getenv("RESPONSE_CACHE_MAX_MB", "100"))
+
 # Size cap for the "_preview" of a truncated response (about half the token budget)
 PREVIEW_BUDGET_CHARS = MAX_RESPONSE_TOKENS * 2
 PREVIEW_MAX_ITEMS = 3
 
 # Create cache directory if it doesn't exist
+# Cached responses can contain sensitive configuration, so keep the directory private
 if ENABLE_FILE_CACHING:
-    Path(RESPONSE_CACHE_DIR).mkdir(exist_ok=True)
+    Path(RESPONSE_CACHE_DIR).mkdir(mode=0o700, exist_ok=True)
 
 # Initialize Meraki API client with optimizations
 dashboard = meraki.DashboardAPI(
@@ -84,29 +91,47 @@ dashboard = meraki.DashboardAPI(
 ###################
 
 class SimpleCache:
-    """Simple in-memory cache with TTL. Thread-safe via threading.Lock."""
+    """In-memory cache with TTL and a size cap. Thread-safe via threading.Lock.
+
+    Entries expire CACHE_TTL_SECONDS after they are stored. Expired entries are purged
+    whenever a value is stored, and when the cache still exceeds CACHE_MAX_ITEMS the
+    oldest entries are evicted, so memory use stays bounded on long-running servers.
+    """
     def __init__(self):
         self._lock = threading.Lock()
-        self.cache = {}
+        self.cache = {}  # insertion-ordered: oldest entry first
         self.timestamps = {}
+
+    def _is_expired(self, key: str, now: float) -> bool:
+        return now - self.timestamps[key] >= CACHE_TTL_SECONDS
+
+    def _delete(self, key: str):
+        del self.cache[key]
+        del self.timestamps[key]
 
     def get(self, key: str) -> Optional[Any]:
         """Get cached value if not expired"""
         with self._lock:
             if key in self.cache:
-                if datetime.now() - self.timestamps[key] < timedelta(seconds=CACHE_TTL_SECONDS):
+                if not self._is_expired(key, time.monotonic()):
                     return self.cache[key]
-                else:
-                    # Expired, remove
-                    del self.cache[key]
-                    del self.timestamps[key]
+                self._delete(key)
             return None
 
     def set(self, key: str, value: Any):
-        """Set cached value"""
+        """Set cached value, purging expired entries and enforcing the size cap"""
         with self._lock:
+            now = time.monotonic()
+            # Re-insert so the entry moves to the newest position
+            if key in self.cache:
+                self._delete(key)
+            for stale in [k for k in self.cache if self._is_expired(k, now)]:
+                self._delete(stale)
             self.cache[key] = value
-            self.timestamps[key] = datetime.now()
+            self.timestamps[key] = now
+            if CACHE_MAX_ITEMS > 0:
+                while len(self.cache) > CACHE_MAX_ITEMS:
+                    self._delete(next(iter(self.cache)))
 
     def clear(self):
         """Clear all cache"""
@@ -117,15 +142,16 @@ class SimpleCache:
     def invalidate(self, prefix: str):
         """Remove all cache entries whose key starts with the given prefix."""
         with self._lock:
-            keys_to_delete = [k for k in self.cache if k.startswith(prefix)]
-            for k in keys_to_delete:
-                del self.cache[k]
-                del self.timestamps[k]
+            for k in [k for k in self.cache if k.startswith(prefix)]:
+                self._delete(k)
 
     def stats(self) -> Dict:
         """Get cache statistics"""
+        with self._lock:
+            total_items = len(self.cache)
         return {
-            "total_items": len(self.cache),
+            "total_items": total_items,
+            "max_items": CACHE_MAX_ITEMS,
             "cache_enabled": ENABLE_CACHING,
             "ttl_seconds": CACHE_TTL_SECONDS
         }
@@ -147,7 +173,9 @@ def save_response_to_file(data: Any, section: str, method: str, params: Dict) ->
     filename = f"{section}_{method}_{param_hash}_{timestamp}.json"
     filepath = os.path.join(RESPONSE_CACHE_DIR, filename)
 
-    with open(filepath, 'w') as f:
+    # Owner-only permissions: responses can include secrets such as SSID pre-shared keys
+    fd = os.open(filepath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
         json.dump({
             "cached_at": timestamp,
             "section": section,
@@ -156,7 +184,58 @@ def save_response_to_file(data: Any, section: str, method: str, params: Dict) ->
             "data": data
         }, f, indent=2)
 
+    prune_response_cache(keep=filepath)
     return filepath
+
+def prune_response_cache(keep: Optional[str] = None) -> Dict[str, int]:
+    """Delete cached response files beyond the configured retention.
+
+    Removes files older than RESPONSE_CACHE_MAX_AGE_HOURS, then the oldest remaining
+    files until the directory is within RESPONSE_CACHE_MAX_MB. The file named by
+    `keep` (the response just written) is never removed. Runs at startup and after
+    each write so the cache directory cannot grow without bound.
+    """
+    removed = {"expired": 0, "over_quota": 0}
+    try:
+        entries = []
+        for entry in os.scandir(RESPONSE_CACHE_DIR):
+            if entry.is_file(follow_symlinks=False) and entry.name.endswith('.json'):
+                stat = entry.stat(follow_symlinks=False)
+                entries.append((stat.st_mtime, stat.st_size, entry.path))
+    except OSError:
+        return removed
+
+    def remove(path: str, reason: str) -> bool:
+        if keep is not None and os.path.abspath(path) == os.path.abspath(keep):
+            return False
+        try:
+            os.remove(path)
+        except OSError:
+            return False
+        removed[reason] += 1
+        return True
+
+    entries.sort()  # oldest first
+    remaining = []
+    cutoff = time.time() - RESPONSE_CACHE_MAX_AGE_HOURS * 3600
+    for mtime, size, path in entries:
+        if RESPONSE_CACHE_MAX_AGE_HOURS > 0 and mtime < cutoff and remove(path, "expired"):
+            continue
+        remaining.append((mtime, size, path))
+
+    if RESPONSE_CACHE_MAX_MB > 0:
+        max_bytes = RESPONSE_CACHE_MAX_MB * 1024 * 1024
+        total = sum(size for _, size, _ in remaining)
+        for mtime, size, path in remaining:
+            if total <= max_bytes:
+                break
+            if remove(path, "over_quota"):
+                total -= size
+
+    return removed
+
+if ENABLE_FILE_CACHING:
+    prune_response_cache()
 
 def _validate_cache_filepath(filepath: str) -> str:
     """Resolve filepath and confirm it is inside RESPONSE_CACHE_DIR.
@@ -509,6 +588,9 @@ async def call_meraki_api(
     """
     Call any Meraki API method - provides access to all 804+ endpoints
 
+    Use search_methods(keyword=...) to find a method and get_method_info(section, method)
+    for its parameters before calling it.
+
     Args:
         section: SDK section (organizations, networks, wireless, switch, appliance, camera, devices, sensor, sm, etc.)
         method: Method name (e.g., getOrganizationAdmins, updateNetworkWirelessSsid, getNetworkApplianceFirewallL3FirewallRules)
@@ -646,13 +728,19 @@ _METHOD_INDEX = _build_method_index()
 # DISCOVERY TOOLS
 ###################
 
+SEARCH_DEFAULT_LIMIT = 50
+SEARCH_MAX_LIMIT = 200
+
 @mcp.tool()
 async def list_all_methods(section: Optional[str] = None) -> str:
     """
-    List all available Meraki API methods
+    List Meraki API methods. Prefer search_methods(keyword=...) to find a method.
+
+    Without a section this returns only the section names and how many methods each
+    has (the full list is roughly 10,000 tokens). Pass a section to list its methods.
 
     Args:
-        section: Optional section filter (organizations, networks, wireless, switch, appliance, etc.)
+        section: Section to list (organizations, networks, wireless, switch, appliance, etc.)
     """
     if section:
         if section not in _METHOD_INDEX:
@@ -660,37 +748,75 @@ async def list_all_methods(section: Optional[str] = None) -> str:
                 "error": f"Section '{section}' not found",
                 "available_sections": list(_METHOD_INDEX.keys())
             })
-        sections_to_show = {section: _METHOD_INDEX[section]}
-    else:
-        sections_to_show = _METHOD_INDEX
+        methods = _METHOD_INDEX[section]
+        return to_json({
+            "section": section,
+            "methods": methods,
+            "total_methods": len(methods),
+            "usage": "Use call_meraki_api(section='...', method='...', parameters={...}) to call any method"
+        })
 
     return to_json({
-        "sections": sections_to_show,
-        "total_methods": sum(len(v) for v in sections_to_show.values()),
-        "usage": "Use call_meraki_api(section='...', method='...', parameters={...}) to call any method"
+        "sections": {name: len(methods) for name, methods in _METHOD_INDEX.items()},
+        "total_methods": sum(len(v) for v in _METHOD_INDEX.values()),
+        "usage": (
+            "Counts of methods per section. Use search_methods(keyword='...') to find a method, "
+            "or list_all_methods(section='...') to list one section"
+        )
     })
 
 @mcp.tool()
-async def search_methods(keyword: str) -> str:
+async def search_methods(keyword: str, section: Optional[str] = None, limit: int = SEARCH_DEFAULT_LIMIT) -> str:
     """
     Search for Meraki API methods by keyword
 
     Args:
-        keyword: Search term (e.g., 'admin', 'firewall', 'ssid', 'event')
+        keyword: One or more search terms; a method must contain all of them
+            (e.g., 'firewall', 'ssid', 'wireless ssid', 'update switch port')
+        section: Optional section to search within (e.g., 'wireless', 'appliance')
+        limit: Maximum number of matches to return (default: 50, max: 200)
     """
-    keyword_lower = keyword.lower()
-    results = {
-        section: [m for m in methods if keyword_lower in m.lower()]
-        for section, methods in _METHOD_INDEX.items()
-    }
-    results = {k: v for k, v in results.items() if v}
+    if section and section not in _METHOD_INDEX:
+        return to_json({
+            "error": f"Section '{section}' not found",
+            "available_sections": list(_METHOD_INDEX.keys())
+        })
 
-    return to_json({
+    terms = keyword.lower().split()
+    if not terms:
+        return to_json({
+            "error": "keyword must not be empty",
+            "hint": "Use list_all_methods() to see the available sections"
+        })
+
+    limit = max(1, min(limit if isinstance(limit, int) else SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT))
+    sections = {section: _METHOD_INDEX[section]} if section else _METHOD_INDEX
+
+    results = {}
+    total_matches = 0
+    returned = 0
+    for section_name, methods in sections.items():
+        matches = [m for m in methods if all(term in m.lower() for term in terms)]
+        total_matches += len(matches)
+        shown = matches[:limit - returned]
+        if shown:
+            results[section_name] = shown
+            returned += len(shown)
+
+    response = {
         "keyword": keyword,
         "results": results,
-        "total_matches": sum(len(v) for v in results.values()),
+        "total_matches": total_matches,
         "usage": "Use call_meraki_api(section='...', method='...', parameters={...})"
-    })
+    }
+    if total_matches > returned:
+        response["_truncated"] = True
+        response["_returned"] = returned
+        response["_hint"] = (
+            f"Showing {returned} of {total_matches} matches. Add more terms to the keyword, "
+            "pass section='...', or raise limit"
+        )
+    return to_json(response)
 
 @mcp.tool()
 async def get_method_info(section: str, method: str) -> str:
@@ -766,7 +892,10 @@ async def get_mcp_config() -> str:
         "file_caching_enabled": ENABLE_FILE_CACHING,
         "max_response_tokens": MAX_RESPONSE_TOKENS,
         "max_per_page": MAX_PER_PAGE,
+        "cache_max_items": CACHE_MAX_ITEMS,
         "response_cache_dir": RESPONSE_CACHE_DIR,
+        "response_cache_max_age_hours": RESPONSE_CACHE_MAX_AGE_HOURS,
+        "response_cache_max_mb": RESPONSE_CACHE_MAX_MB,
         "organization_id_configured": bool(MERAKI_ORG_ID),
         "api_key_configured": bool(MERAKI_API_KEY)
     })

@@ -594,6 +594,189 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual("getOrganizationNetworks", module.dashboard.calls[-1]["method"])
 
 
+@contextmanager
+def dynamic_module(name, **env):
+    """Load the dynamic server with fake SDK modules and a temporary cache directory."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as cache_dir:
+        environ = {"MERAKI_API_KEY": "dummy", "RESPONSE_CACHE_DIR": cache_dir}
+        environ.update(env)
+        with patch.dict(os.environ, environ, clear=True), fake_runtime_modules():
+            yield load_script_module("meraki-mcp-dynamic.py", name), Path(cache_dir)
+
+
+class MemoryCacheBoundTests(unittest.TestCase):
+    def test_cache_evicts_oldest_entries_beyond_the_cap(self):
+        with dynamic_module("test_cache_cap", CACHE_MAX_ITEMS="3") as (module, _):
+            cache = module.SimpleCache()
+            for i in range(5):
+                cache.set(f"k{i}", i)
+            self.assertEqual(["k2", "k3", "k4"], list(cache.cache))
+            self.assertEqual(list(cache.cache), list(cache.timestamps))
+            self.assertIsNone(cache.get("k0"))
+            self.assertEqual(4, cache.get("k4"))
+
+            cache.set("k2", "refreshed")
+            cache.set("k5", 5)
+            self.assertEqual(["k4", "k2", "k5"], list(cache.cache))
+            self.assertEqual(3, cache.stats()["total_items"])
+            self.assertEqual(3, cache.stats()["max_items"])
+
+    def test_expired_entries_are_purged_when_storing(self):
+        with dynamic_module("test_cache_expiry", CACHE_TTL_SECONDS="100") as (module, _):
+            cache = module.SimpleCache()
+            with patch.object(module.time, "monotonic", return_value=1000.0):
+                cache.set("old1", 1)
+                cache.set("old2", 2)
+            with patch.object(module.time, "monotonic", return_value=1099.0):
+                self.assertEqual(1, cache.get("old1"))
+            with patch.object(module.time, "monotonic", return_value=1100.0):
+                self.assertIsNone(cache.get("old1"))
+                cache.set("new", 3)
+                self.assertEqual(["new"], list(cache.cache))
+                self.assertEqual(["new"], list(cache.timestamps))
+
+    def test_zero_cap_means_unlimited(self):
+        with dynamic_module("test_cache_unlimited", CACHE_MAX_ITEMS="0") as (module, _):
+            cache = module.SimpleCache()
+            for i in range(1000):
+                cache.set(f"k{i}", i)
+            self.assertEqual(1000, cache.stats()["total_items"])
+
+
+class FileCacheRetentionTests(unittest.TestCase):
+    @staticmethod
+    def _write(directory, name, size, age_hours):
+        import time
+
+        path = directory / name
+        path.write_text("x" * size)
+        stamp = time.time() - age_hours * 3600
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def test_startup_removes_files_older_than_the_max_age(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as cache_dir:
+            directory = Path(cache_dir)
+            old = self._write(directory, "old.json", 10, age_hours=30)
+            fresh = self._write(directory, "fresh.json", 10, age_hours=1)
+            other = self._write(directory, "notes.txt", 10, age_hours=300)
+            with patch.dict(
+                os.environ,
+                {"MERAKI_API_KEY": "dummy", "RESPONSE_CACHE_DIR": cache_dir},
+                clear=True,
+            ), fake_runtime_modules():
+                load_script_module("meraki-mcp-dynamic.py", "test_file_cache_startup")
+            self.assertFalse(old.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(other.exists())
+
+    def test_size_quota_removes_oldest_files_first(self):
+        with dynamic_module(
+            "test_file_cache_quota", RESPONSE_CACHE_MAX_MB="0.001", RESPONSE_CACHE_MAX_AGE_HOURS="0"
+        ) as (module, directory):
+            oldest = self._write(directory, "a.json", 500, age_hours=50)
+            middle = self._write(directory, "b.json", 500, age_hours=5)
+            newest = self._write(directory, "c.json", 500, age_hours=1)
+
+            removed = module.prune_response_cache()
+
+            self.assertEqual({"expired": 0, "over_quota": 1}, removed)
+            self.assertFalse(oldest.exists())
+            self.assertTrue(middle.exists())
+            self.assertTrue(newest.exists())
+
+    def test_limits_of_zero_disable_pruning(self):
+        with dynamic_module(
+            "test_file_cache_disabled", RESPONSE_CACHE_MAX_MB="0", RESPONSE_CACHE_MAX_AGE_HOURS="0"
+        ) as (module, directory):
+            old = self._write(directory, "a.json", 5000, age_hours=5000)
+            self.assertEqual({"expired": 0, "over_quota": 0}, module.prune_response_cache())
+            self.assertTrue(old.exists())
+
+    def test_saved_response_is_private_and_survives_its_own_prune(self):
+        with dynamic_module(
+            "test_file_cache_save", RESPONSE_CACHE_MAX_MB="0.0001", MAX_RESPONSE_TOKENS="50"
+        ) as (module, directory):
+            stale = self._write(directory, "stale.json", 2000, age_hours=2)
+            rows = [{"serial": f"Q2XX-{i:04d}"} for i in range(200)]
+            module.dashboard.networks = types.SimpleNamespace(getNetworkDevices=lambda networkId: rows)
+
+            response = json.loads(module._call_meraki_method_internal(
+                "networks", "getNetworkDevices", {"networkId": "N_1"}))
+
+            saved = Path(response["_full_response_cached"])
+            self.assertTrue(saved.exists())
+            self.assertFalse(stale.exists())
+            self.assertEqual(rows, module.load_response_from_file(str(saved)))
+            if os.name == "posix":
+                self.assertEqual(0o600, saved.stat().st_mode & 0o777)
+
+
+class DiscoveryToolTests(unittest.TestCase):
+    INDEX = {
+        "wireless": ["getNetworkWirelessSsid", "getNetworkWirelessSsids", "updateNetworkWirelessSsid"],
+        "switch": ["getDeviceSwitchPorts", "updateDeviceSwitchPort"],
+        "appliance": [f"getNetworkApplianceThing{i}" for i in range(120)],
+    }
+
+    @contextmanager
+    def _module(self, name):
+        with dynamic_module(name) as (module, _):
+            module._METHOD_INDEX = self.INDEX
+            yield module
+
+    def test_list_all_methods_without_section_returns_counts_only(self):
+        with self._module("test_discovery_summary") as module:
+            summary = json.loads(asyncio.run(module.list_all_methods()))
+            section = json.loads(asyncio.run(module.list_all_methods("switch")))
+            missing = json.loads(asyncio.run(module.list_all_methods("nope")))
+
+        self.assertEqual({"wireless": 3, "switch": 2, "appliance": 120}, summary["sections"])
+        self.assertEqual(125, summary["total_methods"])
+        self.assertIn("search_methods", summary["usage"])
+        self.assertEqual(self.INDEX["switch"], section["methods"])
+        self.assertEqual(2, section["total_methods"])
+        self.assertIn("error", missing)
+
+    def test_search_requires_all_terms_and_can_filter_by_section(self):
+        with self._module("test_discovery_search") as module:
+            both = json.loads(asyncio.run(module.search_methods("update SSID")))
+            ports = json.loads(asyncio.run(module.search_methods("port")))
+            scoped = json.loads(asyncio.run(module.search_methods("get", section="switch")))
+            empty = json.loads(asyncio.run(module.search_methods("   ")))
+            bad_section = json.loads(asyncio.run(module.search_methods("get", section="nope")))
+
+        self.assertEqual({"wireless": ["updateNetworkWirelessSsid"]}, both["results"])
+        self.assertEqual(1, both["total_matches"])
+        self.assertNotIn("_truncated", both)
+        self.assertEqual({"switch": self.INDEX["switch"]}, ports["results"])
+        self.assertEqual({"switch": ["getDeviceSwitchPorts"]}, scoped["results"])
+        self.assertIn("error", empty)
+        self.assertIn("error", bad_section)
+
+    def test_search_results_are_capped_and_report_the_total(self):
+        with self._module("test_discovery_limit") as module:
+            default = json.loads(asyncio.run(module.search_methods("get")))
+            small = json.loads(asyncio.run(module.search_methods("get", limit=3)))
+            huge = json.loads(asyncio.run(module.search_methods("get", limit=100000)))
+
+        def count(response):
+            return sum(len(v) for v in response["results"].values())
+
+        self.assertEqual(123, default["total_matches"])
+        self.assertEqual(module.SEARCH_DEFAULT_LIMIT, count(default))
+        self.assertTrue(default["_truncated"])
+        self.assertEqual(50, default["_returned"])
+        self.assertEqual({"wireless": ["getNetworkWirelessSsid", "getNetworkWirelessSsids"],
+                          "switch": ["getDeviceSwitchPorts"]}, small["results"])
+        self.assertEqual(123, count(huge))
+        self.assertNotIn("_truncated", huge)
+
+
 class CompactOutputTests(unittest.TestCase):
     def test_to_json_is_compact_and_round_trips(self):
         data = {"a": [1, 2, {"b": None}], "c": "x y", "d": True}
