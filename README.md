@@ -100,7 +100,7 @@ Optional tuning: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `ENABLE_FILE_CACHING`, `
 
 Get your API key from: **Meraki Dashboard → Organization → Settings → Dashboard API access**
 
-`READ_ONLY_MODE` defaults to `true` to block create/update/delete/remove operations. Set `READ_ONLY_MODE=false` only when you intend to make changes. Delete/remove calls also require `confirm_destructive_action=true`.
+`READ_ONLY_MODE` defaults to `true` to block every operation that is not a `get*`/`list*` read. Set `READ_ONLY_MODE=false` only when you intend to make changes. Destructive calls (delete, remove, release, wipe, unenroll, uninstall, revoke, detach) also require `confirm_destructive_action=true`.
 
 Use `MERAKI_BASE_URL` to point the MCP server at another Meraki region or compatible Dashboard API base URI.
 

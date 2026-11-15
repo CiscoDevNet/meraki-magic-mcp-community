@@ -60,6 +60,10 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _raw_cache_dir = os.getenv("RESPONSE_CACHE_DIR", ".meraki_cache")
 RESPONSE_CACHE_DIR = str(Path(_raw_cache_dir) if Path(_raw_cache_dir).is_absolute() else _SCRIPT_DIR / _raw_cache_dir)
 
+# Size cap for the "_preview" of a truncated response (about half the token budget)
+PREVIEW_BUDGET_CHARS = MAX_RESPONSE_TOKENS * 2
+PREVIEW_MAX_ITEMS = 3
+
 # Create cache directory if it doesn't exist
 if ENABLE_FILE_CACHING:
     Path(RESPONSE_CACHE_DIR).mkdir(exist_ok=True)
@@ -178,18 +182,64 @@ def load_response_from_file(filepath: str) -> Any:
     except Exception as e:
         return None
 
+def _truncate_value(value: Any, budget_chars: int) -> Any:
+    """Return value unchanged if it serializes within budget_chars, else a short stand-in."""
+    if len(json.dumps(value)) <= budget_chars:
+        return value
+    if isinstance(value, list):
+        return f"<list of {len(value)} items - see cached file>"
+    if isinstance(value, dict):
+        return f"<object with {len(value)} keys - see cached file>"
+    text = value if isinstance(value, str) else str(value)
+    return text[:max(budget_chars - 20, 0)] + "... <truncated>"
+
+def build_preview(data: Any, budget_chars: Optional[int] = None) -> Any:
+    """Build a preview of data that serializes to roughly budget_chars at most.
+
+    Lists keep up to PREVIEW_MAX_ITEMS leading items, dicts keep their leading keys;
+    in both cases oversized values are replaced by a short stand-in so the preview
+    stays bounded regardless of the shape of the response.
+    """
+    budget = PREVIEW_BUDGET_CHARS if budget_chars is None else budget_chars
+
+    if isinstance(data, list):
+        items = data[:PREVIEW_MAX_ITEMS]
+        per_item = budget // max(len(items), 1)
+        return [
+            build_preview(item, per_item) if isinstance(item, dict) else _truncate_value(item, per_item)
+            for item in items
+        ]
+
+    if isinstance(data, dict):
+        if len(json.dumps(data)) <= budget:
+            return data
+        preview = {}
+        remaining = max(budget - 40, 0)  # reserve room for the braces and "_omitted_keys"
+        per_value = max(budget // PREVIEW_MAX_ITEMS, 1)
+        for index, (key, value) in enumerate(data.items()):
+            entry = _truncate_value(value, min(per_value, remaining))
+            cost = len(json.dumps(key)) + len(json.dumps(entry)) + 2
+            if cost > remaining:
+                preview["_omitted_keys"] = len(data) - index
+                break
+            preview[key] = entry
+            remaining -= cost
+        return preview
+
+    return _truncate_value(data, budget)
+
 def create_truncated_response(data: Any, filepath: str, section: str, method: str, params: Dict) -> Dict:
     """Create a truncated response with metadata about the full cached result"""
     item_count = len(data) if isinstance(data, list) else 1
-    preview_items = data[:3] if isinstance(data, list) and len(data) > 3 else data
+    preview = build_preview(data)
 
-    return {
+    response = {
         "_response_truncated": True,
         "_reason": f"Response too large (~{estimate_token_count(json.dumps(data))} tokens)",
         "_full_response_cached": filepath,
         "_total_items": item_count,
         "_showing": "preview" if isinstance(data, list) else "summary",
-        "_preview": preview_items,
+        "_preview": preview,
         "_hints": {
             "reduce_page_size": f"Reduce request: Use perPage parameter with value <= {MAX_PER_PAGE}",
             "access_via_mcp_paginated": f"get_cached_response(filepath='{filepath}', offset=0, limit=10) - Returns 10 items at a time",
@@ -202,6 +252,9 @@ def create_truncated_response(data: Any, filepath: str, section: str, method: st
         "method": method,
         "parameters": params
     }
+    if isinstance(data, dict):
+        response["_keys"] = _truncate_value(list(data.keys()), PREVIEW_BUDGET_CHARS // 4)
+    return response
 
 def enforce_pagination_limits(params: Dict, method: str) -> Dict:
     """Enforce pagination limits on API parameters"""
@@ -264,11 +317,42 @@ def create_cache_key(section: str, method: str, kwargs: Dict) -> str:
 # GENERIC API CALLER - Provides access to ALL 804+ endpoints
 ###################
 
+def _resolve_sdk_method(section: str, method: str):
+    """Look up a public SDK method in an exposed section.
+
+    Returns (callable, None) on success or (None, error_dict). Only sections listed in
+    SDK_SECTIONS and public methods are reachable, so internals of the dashboard client
+    (e.g. its raw HTTP session) cannot be invoked and bypass the write guards.
+    """
+    if not isinstance(section, str) or section not in SDK_SECTIONS or not hasattr(dashboard, section):
+        return None, {
+            "error": f"Invalid section '{section}'",
+            "available_sections": [s for s in SDK_SECTIONS if hasattr(dashboard, s)]
+        }
+
+    section_obj = getattr(dashboard, section)
+
+    if not isinstance(method, str) or method.startswith('_') or not hasattr(section_obj, method):
+        return None, {
+            "error": f"Method '{method}' not found in section '{section}'",
+            "hint": "Use search_methods(keyword='...') or list_all_methods(section='...') to find valid methods"
+        }
+
+    method_func = getattr(section_obj, method)
+
+    if not callable(method_func):
+        return None, {"error": f"'{method}' is not callable"}
+
+    return method_func, None
+
 def _missing_required_params(section: str, method: str, params: dict) -> list:
     """Return the SDK method's required parameter names that are absent from params."""
     try:
-        sig = inspect.signature(getattr(getattr(dashboard, section), method))
-    except (AttributeError, TypeError, ValueError):
+        method_func, lookup_error = _resolve_sdk_method(section, method)
+        if lookup_error:
+            return []
+        sig = inspect.signature(method_func)
+    except (TypeError, ValueError):
         return []
     return [
         name for name, p in sig.parameters.items()
@@ -290,25 +374,10 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
     original_params = params.copy()
 
     try:
-        # Validate section
-        if not hasattr(dashboard, section):
-            return json.dumps({
-                "error": f"Invalid section '{section}'",
-                "available_sections": SDK_SECTIONS
-            }, indent=2)
-
-        section_obj = getattr(dashboard, section)
-
-        # Validate method
-        if not hasattr(section_obj, method):
-            return json.dumps({
-                "error": f"Method '{method}' not found in section '{section}'"
-            }, indent=2)
-
-        method_func = getattr(section_obj, method)
-
-        if not callable(method_func):
-            return json.dumps({"error": f"'{method}' is not callable"}, indent=2)
+        # Validate section and method (exposed sections and public methods only)
+        method_func, lookup_error = _resolve_sdk_method(section, method)
+        if lookup_error:
+            return json.dumps(lookup_error, indent=2)
 
         # Determine operation type
         is_read = is_read_only_operation(method)
@@ -625,20 +694,10 @@ async def get_method_info(section: str, method: str) -> str:
         method: Method name (e.g., 'getOrganizationAdmins')
     """
     try:
-        if not hasattr(dashboard, section):
-            return json.dumps({
-                "error": f"Section '{section}' not found",
-                "available_sections": SDK_SECTIONS
-            }, indent=2)
+        method_func, lookup_error = _resolve_sdk_method(section, method)
+        if lookup_error:
+            return json.dumps(lookup_error, indent=2)
 
-        section_obj = getattr(dashboard, section)
-
-        if not hasattr(section_obj, method):
-            return json.dumps({
-                "error": f"Method '{method}' not found in '{section}'"
-            }, indent=2)
-
-        method_func = getattr(section_obj, method)
         sig = inspect.signature(method_func)
 
         params = {}

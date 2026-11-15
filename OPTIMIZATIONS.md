@@ -61,9 +61,10 @@ cache_clear
 **Solution:** Read-only mode is enabled by default and blocks all write operations.
 
 ### How It Works:
-- Detects write operations (create, update, delete, remove, reboot, etc.)
+- Treats every SDK method that is not a `get*`/`list*` read as a write (create, update, delete, reboot, wipe, bulk, etc.)
 - If `READ_ONLY_MODE=true`, blocks write operations with clear error
-- If `READ_ONLY_MODE=false`, destructive `delete*` and `remove*` operations still require `confirm_destructive_action=true`
+- If `READ_ONLY_MODE=false`, destructive operations (`delete*`, `remove*`, `release*`, `wipe*`, `unenroll*`, `uninstall*`, `revoke*`, `detach*`, and bulk `*Delete` methods) still require `confirm_destructive_action=true`
+- `call_meraki_api` only reaches public methods of the listed SDK sections; client internals are not callable
 - Read operations work normally
 - Can be toggled anytime via the MCP client `env` or process environment
 

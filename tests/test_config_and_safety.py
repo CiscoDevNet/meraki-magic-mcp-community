@@ -197,6 +197,103 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.is_destructive_operation("releaseFromOrganizationInventory"))
         self.assertFalse(config.is_destructive_operation("updateNetwork"))
 
+    def test_unknown_verbs_are_treated_as_writes(self):
+        for method in [
+            "wipeNetworkSmDevices",
+            "lockNetworkSmDevices",
+            "shutdownNetworkSmDevices",
+            "swapNetworkApplianceWarmSpare",
+            "bulkUpdateOrganizationDevicesDetails",
+            "revokeAdministeredIdentitiesMeApiKeys",
+            "someFutureVerbOrganizationThing",
+            "post",
+            "put",
+            "",
+        ]:
+            with self.subTest(method=method):
+                self.assertTrue(config.is_write_operation(method))
+                self.assertFalse(config.is_read_only_operation(method))
+                self.assertIsNotNone(config.guard_write_operation(method, read_only_mode=True))
+
+        for method in ["getNetwork", "getOrganizationDevices"]:
+            with self.subTest(method=method):
+                self.assertFalse(config.is_write_operation(method))
+                self.assertIsNone(config.guard_write_operation(method, read_only_mode=True))
+
+    def test_destructive_classification_covers_wipe_revoke_and_bulk_delete(self):
+        for method in [
+            "wipeNetworkSmDevices",
+            "unenrollNetworkSmDevice",
+            "uninstallNetworkSmDeviceApps",
+            "revokeAdministeredIdentitiesMeApiKeys",
+            "detachOrganizationSaseSites",
+            "batchOrganizationSaseConnectorsDelete",
+            "bulkOrganizationDevicesPacketCaptureCapturesDelete",
+            "createOrganizationApplianceDnsLocalProfilesAssignmentsBulkDelete",
+        ]:
+            with self.subTest(method=method):
+                self.assertTrue(config.is_destructive_operation(method))
+                blocked = json.loads(config.guard_write_operation(method, read_only_mode=False))
+                self.assertTrue(blocked["confirmation_required"])
+                self.assertIsNone(config.guard_write_operation(method, False, True))
+
+        for method in ["getNetworkSmDevices", "getOrganizationConfigTemplatesDelete", "lockNetworkSmDevices"]:
+            with self.subTest(method=method):
+                self.assertFalse(config.is_destructive_operation(method))
+
+
+class SdkClassificationDriftTests(unittest.TestCase):
+    """Run against the installed Meraki SDK so upgrades cannot silently add unreviewed verbs."""
+
+    @staticmethod
+    def _sdk_methods():
+        import meraki
+
+        dashboard = meraki.DashboardAPI(api_key="dummy", suppress_logging=True)
+        for section_name in dir(dashboard):
+            section = getattr(dashboard, section_name)
+            if section_name.startswith("_") or not hasattr(section, "_session"):
+                continue
+            for method_name in dir(section):
+                if not method_name.startswith("_") and callable(getattr(section, method_name)):
+                    yield section_name, method_name
+
+    def setUp(self):
+        try:
+            import meraki  # noqa: F401
+        except ImportError:
+            self.skipTest("Meraki SDK is not installed")
+
+    def test_every_sdk_method_starts_with_a_reviewed_verb(self):
+        known = config.READ_ONLY_PREFIXES + config.WRITE_PREFIXES
+        unreviewed = sorted(
+            f"{section}.{method}"
+            for section, method in self._sdk_methods()
+            if not any(
+                method.startswith(prefix) and not method[len(prefix):len(prefix) + 1].islower()
+                for prefix in known
+            )
+        )
+        self.assertEqual(
+            [],
+            unreviewed,
+            "New SDK verbs found. Add them to WRITE_PREFIXES in meraki_mcp_config.py "
+            "(and DESTRUCTIVE_PREFIXES if they delete or wipe data).",
+        )
+
+    def test_sdk_delete_like_methods_require_confirmation(self):
+        import re
+
+        pattern = re.compile(r"Delete|Remove|Release|Wipe|Revoke|Unenroll|Uninstall")
+        missed = sorted(
+            f"{section}.{method}"
+            for section, method in self._sdk_methods()
+            if not config.is_read_only_operation(method)
+            and pattern.search(method[0].upper() + method[1:])
+            and not config.is_destructive_operation(method)
+        )
+        self.assertEqual([], missed)
+
 
 class DynamicServerSafetyTests(unittest.TestCase):
     def test_inventory_release_requires_write_mode_and_confirmation(self):
@@ -300,6 +397,129 @@ class DynamicServerSafetyTests(unittest.TestCase):
                 config.CONFIRM_DESTRUCTIVE_ACTION_PARAM,
                 module.dashboard.calls[-1]["kwargs"],
             )
+
+
+    def test_dynamic_blocks_unlisted_write_verbs_in_read_only_mode(self):
+        with patch.dict(os.environ, {"MERAKI_API_KEY": "dummy"}, clear=True), fake_runtime_modules():
+            module = load_script_module("meraki-mcp-dynamic.py", "test_dynamic_read_only_verbs")
+            for method in ["wipeNetworkSmDevices", "lockNetworkSmDevices", "bulkUpdateOrganizationDevicesDetails"]:
+                with self.subTest(method=method):
+                    response = json.loads(
+                        module._call_meraki_method_internal("sm", method, {"networkId": "N_123"})
+                    )
+                    self.assertEqual(
+                        "Write operation blocked - READ_ONLY_MODE is enabled", response["error"]
+                    )
+            self.assertEqual([], module.dashboard.calls)
+
+    def test_dynamic_rejects_internal_sections_and_private_methods(self):
+        with patch.dict(
+            os.environ,
+            {"MERAKI_API_KEY": "dummy", "READ_ONLY_MODE": "false"},
+            clear=True,
+        ), fake_runtime_modules():
+            module = load_script_module("meraki-mcp-dynamic.py", "test_dynamic_allowlist")
+            session_calls = []
+
+            def record(*args, **kwargs):
+                session_calls.append((args, kwargs))
+                return {"ok": True}
+
+            module.dashboard._session = types.SimpleNamespace(post=record, put=record, get=record)
+            module.dashboard.batch = types.SimpleNamespace(getSomething=record)
+            module.dashboard.networks._private = record
+
+            for section, method in [
+                ("_session", "post"),
+                ("_session", "put"),
+                ("_session", "get"),
+                ("batch", "getSomething"),
+                ("__class__", "mro"),
+                ("networks", "_private"),
+                ("networks", "__init__"),
+            ]:
+                with self.subTest(section=section, method=method):
+                    response = json.loads(
+                        module._call_meraki_method_internal(section, method, {"url": "/organizations"})
+                    )
+                    self.assertIn("error", response)
+                    info = json.loads(asyncio.run(module.get_method_info(section, method)))
+                    self.assertIn("error", info)
+
+            self.assertEqual([], session_calls)
+            self.assertEqual([], module.dashboard.calls)
+
+            allowed = json.loads(
+                module._call_meraki_method_internal("networks", "getNetwork", {"networkId": "N_1"})
+            )
+            self.assertEqual("getNetwork", allowed["method"])
+
+
+class DynamicServerTruncationTests(unittest.TestCase):
+    def _load(self, name, cache_dir):
+        return patch.dict(
+            os.environ,
+            {
+                "MERAKI_API_KEY": "dummy",
+                "MAX_RESPONSE_TOKENS": "500",
+                "RESPONSE_CACHE_DIR": cache_dir,
+            },
+            clear=True,
+        )
+
+    def _call_with_result(self, result):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as cache_dir, self._load("x", cache_dir), fake_runtime_modules():
+            module = load_script_module("meraki-mcp-dynamic.py", "test_dynamic_truncation")
+            module.dashboard.networks = types.SimpleNamespace(getNetwork=lambda networkId: result)
+            raw = module._call_meraki_method_internal("networks", "getNetwork", {"networkId": "N_1"})
+            response = json.loads(raw)
+            cached = None
+            if response.get("_response_truncated"):
+                cached = module.load_response_from_file(response["_full_response_cached"])
+            return module, raw, response, cached
+
+    def assert_bounded(self, module, raw, response, cached, result):
+        self.assertTrue(response["_response_truncated"])
+        self.assertEqual(result, cached)
+        preview_chars = len(json.dumps(response["_preview"]))
+        self.assertLessEqual(preview_chars, module.PREVIEW_BUDGET_CHARS)
+        self.assertLess(len(raw), len(json.dumps(result)))
+
+    def test_large_dict_response_is_actually_truncated(self):
+        result = {f"key{i}": "v" * 100 for i in range(400)}
+        module, raw, response, cached = self._call_with_result(result)
+        self.assert_bounded(module, raw, response, cached, result)
+        self.assertEqual("v" * 100, response["_preview"]["key0"])
+        self.assertGreater(response["_preview"]["_omitted_keys"], 0)
+
+    def test_dict_with_one_huge_value_is_truncated(self):
+        result = {"name": "net", "items": [{"id": i, "pad": "x" * 50} for i in range(500)]}
+        module, raw, response, cached = self._call_with_result(result)
+        self.assert_bounded(module, raw, response, cached, result)
+        self.assertEqual("net", response["_preview"]["name"])
+        self.assertEqual("<list of 500 items - see cached file>", response["_preview"]["items"])
+        self.assertEqual(["name", "items"], response["_keys"])
+
+    def test_short_list_of_huge_items_is_truncated(self):
+        result = [{"id": i, "blob": "x" * 5000} for i in range(2)]
+        module, raw, response, cached = self._call_with_result(result)
+        self.assert_bounded(module, raw, response, cached, result)
+        self.assertEqual(2, response["_total_items"])
+        self.assertEqual(0, response["_preview"][0]["id"])
+
+    def test_long_list_keeps_first_items_intact(self):
+        result = [{"serial": f"Q2XX-{i:04d}", "name": f"ap{i}"} for i in range(300)]
+        module, raw, response, cached = self._call_with_result(result)
+        self.assert_bounded(module, raw, response, cached, result)
+        self.assertEqual(result[:3], response["_preview"])
+        self.assertEqual(300, response["_total_items"])
+
+    def test_small_response_is_returned_unchanged(self):
+        result = {"id": "N_1", "name": "small"}
+        _, _, response, _ = self._call_with_result(result)
+        self.assertEqual(result, response)
 
 
 class DynamicServerParameterTests(unittest.TestCase):

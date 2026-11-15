@@ -12,27 +12,87 @@ DEFAULT_MERAKI_CALLER = "MagicMCP CiscoDevNet"
 CONFIRM_DESTRUCTIVE_ACTION_PARAM = "confirm_destructive_action"
 
 READ_ONLY_PREFIXES = ("get", "list")
+
+# Leading verbs of every non-read method in the Meraki SDK that have been reviewed.
+# Classification fails closed: anything that is not a read is treated as a write
+# whether or not its verb is listed here. The list exists so that
+# tests/test_config_and_safety.py fails when an SDK upgrade introduces a new verb,
+# prompting a review of whether it also belongs in DESTRUCTIVE_PREFIXES.
 WRITE_PREFIXES = (
+    "add",
+    "assign",
+    "attach",
+    "batch",
+    "bind",
+    "blink",
+    "bulk",
+    "cancel",
+    "certificates",
+    "checkin",
+    "claim",
+    "clip",
+    "clone",
+    "combine",
+    "commit",
+    "connect",
     "create",
+    "cycle",
+    "declare",
+    "defer",
+    "delete",
+    "detach",
+    "disable",
+    "disconnect",
+    "dismiss",
+    "enable",
+    "exclusions",
+    "generate",
+    "httpsi",
+    "install",
+    "lock",
+    "modify",
+    "move",
+    "preview",
+    "protection",
+    "provision",
+    "publish",
+    "reassign",
+    "reboot",
+    "recalculate",
+    "refresh",
+    "release",
+    "remove",
+    "renew",
+    "reorder",
+    "restore",
+    "revoke",
+    "rollbacks",
+    "set",
+    "shutdown",
+    "split",
+    "stop",
+    "swap",
+    "unbind",
+    "unenroll",
+    "uninstall",
     "update",
+    "validate",
+    "vmx",
+    "wipe",
+)
+DESTRUCTIVE_PREFIXES = (
     "delete",
     "remove",
     "release",
-    "claim",
-    "reboot",
-    "assign",
-    "move",
-    "renew",
-    "clone",
-    "combine",
-    "split",
-    "bind",
-    "unbind",
-    "cycle",
-    "generate",
-    "blink",
+    "wipe",
+    "unenroll",
+    "uninstall",
+    "revoke",
+    "detach",
 )
-DESTRUCTIVE_PREFIXES = ("delete", "remove", "release")
+# Bulk endpoints put the verb last, e.g. bulkOrganizationNetworksGroup...Delete
+# and create...AssignmentsBulkDelete.
+DESTRUCTIVE_SUFFIXES = ("Delete",)
 
 _TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 _FALSE_VALUES = {"0", "false", "no", "n", "off"}
@@ -82,13 +142,17 @@ def is_read_only_operation(method_name: str) -> bool:
 
 
 def is_write_operation(method_name: str) -> bool:
-    normalized = method_name.lower()
-    return any(normalized.startswith(prefix) for prefix in WRITE_PREFIXES)
+    """Treat every method that is not a known read as a write (fail closed)."""
+    return not is_read_only_operation(method_name)
 
 
 def is_destructive_operation(method_name: str) -> bool:
+    if is_read_only_operation(method_name):
+        return False
     normalized = method_name.lower()
-    return any(normalized.startswith(prefix) for prefix in DESTRUCTIVE_PREFIXES)
+    return any(normalized.startswith(prefix) for prefix in DESTRUCTIVE_PREFIXES) or method_name.endswith(
+        DESTRUCTIVE_SUFFIXES
+    )
 
 
 def pop_destructive_confirmation(params: MutableMapping[str, Any]) -> bool:

@@ -63,7 +63,7 @@ call_meraki_api(
 
 ## Safety and Region Configuration
 
-The server starts in read-only mode by default. Set `READ_ONLY_MODE=false` only when you intend to run create/update/delete/remove operations. Destructive `delete*` and `remove*` calls also require `confirm_destructive_action=true` in `parameters`.
+The server starts in read-only mode by default. Set `READ_ONLY_MODE=false` only when you intend to run write operations; every method that is not a `get*`/`list*` read is treated as a write. Destructive calls (`delete*`, `remove*`, `release*`, `wipe*`, `unenroll*`, `uninstall*`, `revoke*`, `detach*`, and bulk `*Delete` methods) also require `confirm_destructive_action=true` in `parameters`.
 
 Set these variables in the MCP client `env` block or process environment to select a region and caller identifier:
 
