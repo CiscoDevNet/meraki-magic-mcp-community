@@ -594,6 +594,59 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual("getOrganizationNetworks", module.dashboard.calls[-1]["method"])
 
 
+class DependencyLockTests(unittest.TestCase):
+    """requirements.txt is the lockfile generated from pyproject.toml; keep them in step."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tomllib
+
+        try:
+            from packaging.requirements import Requirement
+            from packaging.utils import canonicalize_name
+        except ImportError:
+            raise unittest.SkipTest("packaging is not installed")
+
+        cls.canonicalize_name = staticmethod(canonicalize_name)
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+        cls.project = project
+        cls.direct = [Requirement(spec) for spec in project["dependencies"]]
+        cls.lock_text = (ROOT / "requirements.txt").read_text()
+        cls.locked = {}
+        for line in cls.lock_text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                requirement = Requirement(line)
+                cls.locked[canonicalize_name(requirement.name)] = requirement
+
+    def test_lockfile_is_generated_from_pyproject(self):
+        self.assertIn("uv pip compile pyproject.toml", self.lock_text.splitlines()[1])
+
+    def test_every_locked_package_is_pinned_to_one_version(self):
+        unpinned = sorted(
+            name for name, requirement in self.locked.items()
+            if [spec.operator for spec in requirement.specifier] != ["=="]
+        )
+        self.assertEqual([], unpinned)
+
+    def test_direct_dependencies_are_locked_within_their_allowed_range(self):
+        for requirement in self.direct:
+            name = self.canonicalize_name(requirement.name)
+            with self.subTest(dependency=name):
+                self.assertIn(name, self.locked)
+                pinned = next(iter(self.locked[name].specifier)).version
+                self.assertTrue(
+                    requirement.specifier.contains(pinned, prereleases=True),
+                    f"requirements.txt pins {name}=={pinned}, outside '{requirement.specifier}' "
+                    "from pyproject.toml; regenerate the lockfile",
+                )
+
+    def test_project_metadata_is_filled_in(self):
+        self.assertNotIn("Add your description", self.project["description"])
+        self.assertEqual((ROOT / ".python-version").read_text().strip(),
+                         self.project["requires-python"].lstrip(">="))
+
+
 @contextmanager
 def dynamic_module(name, **env):
     """Load the dynamic server with fake SDK modules and a temporary cache directory."""
