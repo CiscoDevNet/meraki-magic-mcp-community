@@ -5,8 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "fastmcp>=3.4.4",
-    "mcp[cli]>=1.28.1",
-    "meraki>=4.5.0",
+    "fastmcp>=3.4.4,<4",
+    "mcp[cli]>=1.28.1,<2",
+    "meraki>=4.7",
     "uvicorn>=0.51.0",
 ]
