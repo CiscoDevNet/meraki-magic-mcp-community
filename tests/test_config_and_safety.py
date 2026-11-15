@@ -594,6 +594,58 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual("getOrganizationNetworks", module.dashboard.calls[-1]["method"])
 
 
+class CompactOutputTests(unittest.TestCase):
+    def test_to_json_is_compact_and_round_trips(self):
+        data = {"a": [1, 2, {"b": None}], "c": "x y", "d": True}
+        text = config.to_json(data)
+        self.assertEqual('{"a":[1,2,{"b":null}],"c":"x y","d":true}', text)
+        self.assertEqual(data, json.loads(text))
+
+    def test_guard_payloads_are_compact(self):
+        blocked = config.guard_write_operation("deleteNetwork", read_only_mode=True)
+        self.assertNotIn("\n", blocked)
+        self.assertEqual("deleteNetwork", json.loads(blocked)["method"])
+
+    def test_dynamic_responses_are_compact_and_within_the_token_budget(self):
+        rows = [{"serial": f"Q2XX-{i:04d}", "name": f"ap{i}", "tags": ["a", "b"]} for i in range(40)]
+        compact_chars = len(config.to_json(rows))
+        # Budget sits between the compact and the indented size of this response
+        self.assertLess(compact_chars, len(json.dumps(rows, indent=2)) - 400)
+        budget_tokens = compact_chars // 4 + 50
+        with patch.dict(
+            os.environ,
+            {"MERAKI_API_KEY": "dummy", "ENABLE_FILE_CACHING": "true",
+             "MAX_RESPONSE_TOKENS": str(budget_tokens)},
+            clear=True,
+        ), fake_runtime_modules():
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as cache_dir, patch.dict(
+                os.environ, {"RESPONSE_CACHE_DIR": cache_dir}
+            ):
+                module = load_script_module("meraki-mcp-dynamic.py", "test_dynamic_compact")
+                module.dashboard.networks = types.SimpleNamespace(getNetworkDevices=lambda networkId: rows)
+                raw = module._call_meraki_method_internal(
+                    "networks", "getNetworkDevices", {"networkId": "N_1"})
+                error = module._call_meraki_method_internal("nope", "getX", {})
+                info = asyncio.run(module.get_mcp_config())
+
+        self.assertEqual(rows, json.loads(raw))
+        self.assertEqual(config.to_json(rows), raw)
+        self.assertLessEqual(module.estimate_token_count(raw), budget_tokens)
+        for text in (raw, error, info):
+            self.assertNotIn("\n", text)
+
+    def test_manual_responses_are_compact(self):
+        with patch.dict(
+            os.environ, {"MERAKI_API_KEY": "dummy", "MERAKI_ORG_ID": "1"}, clear=True
+        ), fake_runtime_modules():
+            module = load_script_module("meraki-mcp.py", "test_manual_compact")
+            module.dashboard.networks.getNetwork = lambda network_id: {"id": network_id, "tags": ["a"]}
+            raw = module.get_network_details("N_1")
+        self.assertEqual('{"id":"N_1","tags":["a"]}', raw)
+
+
 class ManualServerThreadingTests(unittest.TestCase):
     def test_every_manual_tool_is_registered_as_async(self):
         if not fastmcp_available():

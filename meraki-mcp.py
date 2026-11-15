@@ -16,6 +16,7 @@ from meraki_mcp_config import (
     get_meraki_caller,
     get_read_only_mode,
     guard_write_operation,
+    to_json,
 )
 
 # Transport configuration
@@ -104,8 +105,8 @@ def _single_device_result(results: list, serial: str, not_found_message: str) ->
     """Return the entry for serial from an organization-wide list, or a not-found error."""
     for entry in results or []:
         if entry.get("serial") == serial:
-            return json.dumps(entry, indent=2)
-    return json.dumps({"error": not_found_message, "serial": serial}, indent=2)
+            return to_json(entry)
+    return to_json({"error": not_found_message, "serial": serial})
 
 # Create async versions of commonly used Meraki API methods
 async_get_organizations = to_async(dashboard.organizations.getOrganizations)
@@ -246,7 +247,7 @@ class SwitchQosRuleSchema(BaseModel):
 async def get_organizations() -> str:
     """Get a list of organizations the user has access to"""
     organizations = await async_get_organizations()
-    return json.dumps(organizations, indent=2)
+    return to_json(organizations)
 
 # Get organization details
 @mcp.tool()
@@ -254,7 +255,7 @@ async def get_organization_details(org_id: Optional[str] = None) -> str:
     """Get details for a specific organization, defaults to the configured organization"""
     organization_id = org_id or MERAKI_ORG_ID
     org_details = await async_get_organization(organization_id)
-    return json.dumps(org_details, indent=2)
+    return to_json(org_details)
 
 # Get networks from Meraki
 @mcp.tool()
@@ -262,7 +263,7 @@ async def get_networks(org_id: Optional[str] = None) -> str:
     """Get a list of networks from Meraki"""
     organization_id = org_id or MERAKI_ORG_ID
     networks = await async_get_organization_networks(organization_id)
-    return json.dumps(networks, indent=2)
+    return to_json(networks)
 
 # Get devices from Meraki
 @mcp.tool()
@@ -270,7 +271,7 @@ async def get_devices(org_id: Optional[str] = None) -> str:
     """Get a list of devices from Meraki (auto-paginates)"""
     organization_id = org_id or MERAKI_ORG_ID
     devices = await async_get_organization_devices(organization_id, total_pages='all', perPage=1000)
-    return json.dumps(devices, indent=2)
+    return to_json(devices)
 
 # Create network in Meraki
 @threaded_tool
@@ -284,7 +285,7 @@ def create_network(name: str, tags: list[str], productTypes: list[str], org_id: 
     if copyFromNetworkId:
         kwargs['copyFromNetworkId'] = copyFromNetworkId
     network = dashboard.organizations.createOrganizationNetwork(organization_id, name, productTypes, tags=tags, **kwargs)
-    return json.dumps(network, indent=2)
+    return to_json(network)
 
 # Delete network in Meraki
 @threaded_tool
@@ -302,7 +303,7 @@ def get_organization_status(org_id: Optional[str] = None) -> str:
     """Get the status and health of an organization (device counts by status and product type)"""
     organization_id = org_id or MERAKI_ORG_ID
     status = dashboard.organizations.getOrganizationDevicesStatusesOverview(organization_id)
-    return json.dumps(status, indent=2)
+    return to_json(status)
 
 # Get organization inventory
 @threaded_tool
@@ -310,7 +311,7 @@ def get_organization_inventory(org_id: Optional[str] = None) -> str:
     """Get the inventory for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     inventory = dashboard.organizations.getOrganizationInventoryDevices(organization_id, total_pages='all', perPage=1000)
-    return json.dumps(inventory, indent=2)
+    return to_json(inventory)
 
 # Get organization license state
 @threaded_tool
@@ -318,7 +319,7 @@ def get_organization_license(org_id: Optional[str] = None) -> str:
     """Get the license state for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     license_state = dashboard.organizations.getOrganizationLicensesOverview(organization_id)
-    return json.dumps(license_state, indent=2)
+    return to_json(license_state)
 
 # Get organization configuration changes
 @threaded_tool
@@ -326,7 +327,7 @@ def get_organization_conf_change(org_id: Optional[str] = None) -> str:
     """Get the org change state for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     org_config_changes = dashboard.organizations.getOrganizationConfigurationChanges(organization_id, total_pages='all', perPage=1000)
-    return json.dumps(org_config_changes, indent=2)
+    return to_json(org_config_changes)
 
 #######################
 # NETWORK TOOLS       #
@@ -337,14 +338,14 @@ def get_organization_conf_change(org_id: Optional[str] = None) -> str:
 def get_network_details(network_id: str) -> str:
     """Get details for a specific network"""
     network = dashboard.networks.getNetwork(network_id)
-    return json.dumps(network, indent=2)
+    return to_json(network)
 
 # Get network devices
 @threaded_tool
 def get_network_devices(network_id: str) -> str:
     """Get a list of devices in a specific network"""
     devices = dashboard.networks.getNetworkDevices(network_id)
-    return json.dumps(devices, indent=2)
+    return to_json(devices)
 
 # Update network
 @threaded_tool
@@ -364,7 +365,7 @@ def update_network(network_id: str, update_data: NetworkUpdateSchema) -> str:
     update_dict = update_data.model_dump(exclude_none=True)
 
     result = dashboard.networks.updateNetwork(network_id, **update_dict)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get clients from Meraki
 @threaded_tool
@@ -384,21 +385,21 @@ def get_clients(network_id: str, timespan: int = 86400, statuses: Optional[str] 
     if statuses:
         kwargs["statuses"] = [statuses]
     clients = dashboard.networks.getNetworkClients(network_id, total_pages='all', **kwargs)
-    return json.dumps(clients, indent=2)
+    return to_json(clients)
 
 # Get client details
 @threaded_tool
 def get_client_details(network_id: str, client_id: str) -> str:
     """Get details for a specific client in a network"""
     client = dashboard.networks.getNetworkClient(network_id, client_id)
-    return json.dumps(client, indent=2)
+    return to_json(client)
 
 # Get client usage history
 @threaded_tool
 def get_client_usage(network_id: str, client_id: str) -> str:
     """Get the usage history for a client"""
     usage = dashboard.networks.getNetworkClientUsageHistory(network_id, client_id)
-    return json.dumps(usage, indent=2)
+    return to_json(usage)
 
 # Get client policy from Meraki
 @mcp.tool()
@@ -416,7 +417,7 @@ async def get_client_policy(network_id: str, client_id: str) -> str:
     policy = await asyncio.to_thread(
         dashboard.networks.getNetworkClientPolicy, network_id, client_id
     )
-    return json.dumps(policy, indent=2)
+    return to_json(policy)
 
 # Update client policy
 @threaded_tool
@@ -430,14 +431,14 @@ def update_client_policy(network_id: str, client_id: str, device_policy: str, gr
         kwargs['groupPolicyId'] = group_policy_id
 
     result = dashboard.networks.updateNetworkClientPolicy(network_id, client_id, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get network traffic analysis
 @threaded_tool
 def get_network_traffic(network_id: str, timespan: int = 86400) -> str:
     """Get traffic analysis data for a network"""
     traffic = dashboard.networks.getNetworkTraffic(network_id, timespan=timespan)
-    return json.dumps(traffic, indent=2)
+    return to_json(traffic)
 
 #######################
 # DEVICE TOOLS        #
@@ -448,7 +449,7 @@ def get_network_traffic(network_id: str, timespan: int = 86400) -> str:
 async def get_device_details(serial: str) -> str:
     """Get details for a specific device by serial number"""
     device = await async_get_device(serial)
-    return json.dumps(device, indent=2)
+    return to_json(device)
 
 # Update device
 @mcp.tool()
@@ -475,12 +476,12 @@ async def update_device(serial: str, device_settings: DeviceUpdateSchema) -> str
     # Get the updated device details to return
     updated_device = await async_get_device(serial)
 
-    return json.dumps({
+    return to_json({
         "status": "success",
         "message": f"Device {serial} updated",
         "updated_settings": update_dict,
         "current_device": updated_device
-    }, indent=2)
+    })
 
 # Claim devices into the Meraki organization
 @threaded_tool
@@ -510,14 +511,14 @@ def reboot_device(serial: str) -> str:
     if blocked:
         return blocked
     result = dashboard.devices.rebootDevice(serial)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get device clients
 @threaded_tool
 def get_device_clients(serial: str, timespan: int = 86400) -> str:
     """Get clients connected to a specific device"""
     clients = dashboard.devices.getDeviceClients(serial, timespan=timespan)
-    return json.dumps(clients, indent=2)
+    return to_json(clients)
 
 # Get device status
 @threaded_tool
@@ -550,7 +551,7 @@ def get_device_uplink(serial: str, org_id: Optional[str] = None) -> str:
 async def get_wireless_ssids(network_id: str) -> str:
     """Get wireless SSIDs for a network"""
     ssids = await async_get_wireless_ssids(network_id)
-    return json.dumps(ssids, indent=2)
+    return to_json(ssids)
 
 # Update wireless SSID
 @mcp.tool()
@@ -574,14 +575,14 @@ async def update_wireless_ssid(network_id: str, ssid_number: str, ssid_settings:
     update_dict = ssid_settings.model_dump(exclude_none=True)
 
     result = await async_update_wireless_ssid(network_id, ssid_number, **update_dict)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get wireless settings
 @threaded_tool
 def get_wireless_settings(network_id: str) -> str:
     """Get wireless settings for a network"""
     settings = dashboard.wireless.getNetworkWirelessSettings(network_id)
-    return json.dumps(settings, indent=2)
+    return to_json(settings)
 
 
 
@@ -594,7 +595,7 @@ def get_wireless_settings(network_id: str) -> str:
 def get_switch_ports(serial: str) -> str:
     """Get ports for a switch"""
     ports = dashboard.switch.getDeviceSwitchPorts(serial)
-    return json.dumps(ports, indent=2)
+    return to_json(ports)
 
 # Update switch port
 @threaded_tool
@@ -605,14 +606,14 @@ def update_switch_port(serial: str, port_id: str, name: Optional[str] = None, ta
         return blocked
     kwargs = _build_kwargs(name=name, tags=tags, enabled=enabled, vlan=vlan)
     result = dashboard.switch.updateDeviceSwitchPort(serial, port_id, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get VLANs (the Meraki API defines VLANs on the network's MX security appliance)
 @threaded_tool
 def get_switch_vlans(network_id: str) -> str:
     """Get VLANs for a network. VLANs are defined on the network's MX security appliance and must be enabled there."""
     vlans = dashboard.appliance.getNetworkApplianceVlans(network_id)
-    return json.dumps(vlans, indent=2)
+    return to_json(vlans)
 
 # Create switch VLAN
 @threaded_tool
@@ -628,7 +629,7 @@ def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: Optiona
         kwargs['applianceIp'] = appliance_ip
 
     result = dashboard.appliance.createNetworkApplianceVlan(network_id, str(vlan_id), name, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 #######################
 # APPLIANCE TOOLS     #
@@ -647,21 +648,21 @@ def get_security_center(network_id: str, timespan: int = 86400, per_page: int = 
     security = dashboard.appliance.getNetworkApplianceSecurityEvents(
         network_id, timespan=timespan, perPage=per_page
     )
-    return json.dumps(security, indent=2)
+    return to_json(security)
 
 # Get VPN status
 @threaded_tool
 def get_vpn_status(network_id: str) -> str:
     """Get VPN status for a network"""
     vpn_status = dashboard.appliance.getNetworkApplianceVpnSiteToSiteVpn(network_id)
-    return json.dumps(vpn_status, indent=2)
+    return to_json(vpn_status)
 
 # Get firewall rules
 @threaded_tool
 def get_firewall_rules(network_id: str) -> str:
     """Get firewall rules for a network"""
     rules = dashboard.appliance.getNetworkApplianceFirewallL3FirewallRules(network_id)
-    return json.dumps(rules, indent=2)
+    return to_json(rules)
 
 # Update firewall rules
 @threaded_tool
@@ -684,7 +685,7 @@ def update_firewall_rules(network_id: str, rules: List[FirewallRule]) -> str:
     rules_dict = [rule.model_dump(exclude_none=True) for rule in rules]
 
     result = dashboard.appliance.updateNetworkApplianceFirewallL3FirewallRules(network_id, rules=rules_dict)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 #######################
 # CAMERA TOOLS        #
@@ -695,14 +696,14 @@ def update_firewall_rules(network_id: str, rules: List[FirewallRule]) -> str:
 def get_camera_video_settings(serial: str) -> str:
     """Get video settings for a camera"""
     settings = dashboard.camera.getDeviceCameraVideoSettings(serial)
-    return json.dumps(settings, indent=2)
+    return to_json(settings)
 
 # Get camera quality and retention settings
 @threaded_tool
 def get_camera_quality_settings(network_id: str) -> str:
     """Get quality and retention settings for cameras in a network"""
     settings = dashboard.camera.getNetworkCameraQualityRetentionProfiles(network_id)
-    return json.dumps(settings, indent=2)
+    return to_json(settings)
 
 #######################
 # ADVANCED ORGANIZATION TOOLS
@@ -714,7 +715,7 @@ def get_organization_admins(org_id: Optional[str] = None) -> str:
     """Get a list of organization admins"""
     organization_id = org_id or MERAKI_ORG_ID
     admins = dashboard.organizations.getOrganizationAdmins(organization_id)
-    return json.dumps(admins, indent=2)
+    return to_json(admins)
 
 # Create organization admin
 @threaded_tool
@@ -735,7 +736,7 @@ def create_organization_admin(org_id: str, email: str, name: str, org_access: st
         kwargs['networks'] = networks
     
     result = dashboard.organizations.createOrganizationAdmin(organization_id, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get organization API requests
 @threaded_tool
@@ -743,7 +744,7 @@ def get_organization_api_requests(org_id: Optional[str] = None, timespan: int = 
     """Get organization API request history"""
     organization_id = org_id or MERAKI_ORG_ID
     requests = dashboard.organizations.getOrganizationApiRequests(organization_id, timespan=timespan, total_pages='all', perPage=1000)
-    return json.dumps(requests, indent=2)
+    return to_json(requests)
 
 # Get organization webhook logs
 @threaded_tool
@@ -751,7 +752,7 @@ def get_organization_webhook_logs(org_id: Optional[str] = None, timespan: int = 
     """Get organization webhook logs"""
     organization_id = org_id or MERAKI_ORG_ID
     logs = dashboard.organizations.getOrganizationWebhooksLogs(organization_id, timespan=timespan, total_pages='all', perPage=1000)
-    return json.dumps(logs, indent=2)
+    return to_json(logs)
 
 #######################
 # ENHANCED NETWORK MONITORING
@@ -762,28 +763,28 @@ def get_organization_webhook_logs(org_id: Optional[str] = None, timespan: int = 
 def get_network_events(network_id: str, timespan: int = 86400, per_page: int = 1000) -> str:
     """Get network events history (auto-paginates)"""
     events = dashboard.networks.getNetworkEvents(network_id, total_pages='all', timespan=timespan, perPage=per_page)
-    return json.dumps(events, indent=2)
+    return to_json(events)
 
 # Get network event types
 @threaded_tool
 def get_network_event_types(network_id: str) -> str:
     """Get available network event types"""
     event_types = dashboard.networks.getNetworkEventsEventTypes(network_id)
-    return json.dumps(event_types, indent=2)
+    return to_json(event_types)
 
 # Get network alerts history
 @threaded_tool
 def get_network_alerts_history(network_id: str, timespan: int = 86400) -> str:
     """Get network alerts history"""
     alerts = dashboard.networks.getNetworkAlertsHistory(network_id, timespan=timespan)
-    return json.dumps(alerts, indent=2)
+    return to_json(alerts)
 
 # Get network alerts settings
 @threaded_tool
 def get_network_alerts_settings(network_id: str) -> str:
     """Get network alerts settings"""
     settings = dashboard.networks.getNetworkAlertsSettings(network_id)
-    return json.dumps(settings, indent=2)
+    return to_json(settings)
 
 # Update network alerts settings
 @threaded_tool
@@ -799,7 +800,7 @@ def update_network_alerts_settings(network_id: str, defaultDestinations: Optiona
         kwargs['alerts'] = alerts
     
     result = dashboard.networks.updateNetworkAlertsSettings(network_id, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 #######################
 # LIVE DEVICE TOOLS
@@ -813,14 +814,14 @@ def ping_device(serial: str, target_ip: str, count: int = 5) -> str:
     if blocked:
         return blocked
     result = dashboard.devices.createDeviceLiveToolsPing(serial, target_ip, count=count)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get ping results
 @threaded_tool
 def get_device_ping_results(serial: str, ping_id: str) -> str:
     """Get results from a device ping test"""
     result = dashboard.devices.getDeviceLiveToolsPing(serial, ping_id)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Cable test device
 @threaded_tool
@@ -830,14 +831,14 @@ def cable_test_device(serial: str, ports: list[str]) -> str:
     if blocked:
         return blocked
     result = dashboard.devices.createDeviceLiveToolsCableTest(serial, ports)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get cable test results
 @threaded_tool
 def get_device_cable_test_results(serial: str, cable_test_id: str) -> str:
     """Get results from a device cable test"""
     result = dashboard.devices.getDeviceLiveToolsCableTest(serial, cable_test_id)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Blink device LEDs
 @threaded_tool
@@ -847,7 +848,7 @@ def blink_device_leds(serial: str, duration: int = 5) -> str:
     if blocked:
         return blocked
     result = dashboard.devices.blinkDeviceLeds(serial, duration=duration)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Wake on LAN
 @threaded_tool
@@ -857,7 +858,7 @@ def wake_on_lan_device(serial: str, mac: str) -> str:
     if blocked:
         return blocked
     result = dashboard.devices.createDeviceLiveToolsWakeOnLan(serial, mac)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 #######################
 # ADVANCED WIRELESS TOOLS
@@ -868,7 +869,7 @@ def wake_on_lan_device(serial: str, mac: str) -> str:
 def get_wireless_rf_profiles(network_id: str) -> str:
     """Get wireless RF profiles for a network"""
     profiles = dashboard.wireless.getNetworkWirelessRfProfiles(network_id)
-    return json.dumps(profiles, indent=2)
+    return to_json(profiles)
 
 # Create wireless RF profile
 @threaded_tool
@@ -878,35 +879,35 @@ def create_wireless_rf_profile(network_id: str, name: str, band_selection_type: 
     if blocked:
         return blocked
     result = dashboard.wireless.createNetworkWirelessRfProfile(network_id, name, bandSelectionType=band_selection_type, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get wireless channel utilization
 @threaded_tool
 def get_wireless_channel_utilization(network_id: str, timespan: int = 86400) -> str:
     """Get wireless channel utilization history"""
     utilization = dashboard.wireless.getNetworkWirelessChannelUtilizationHistory(network_id, timespan=timespan)
-    return json.dumps(utilization, indent=2)
+    return to_json(utilization)
 
 # Get wireless signal quality
 @threaded_tool
 def get_wireless_signal_quality(network_id: str, timespan: int = 86400) -> str:
     """Get wireless signal quality history"""
     quality = dashboard.wireless.getNetworkWirelessSignalQualityHistory(network_id, timespan=timespan)
-    return json.dumps(quality, indent=2)
+    return to_json(quality)
 
 # Get wireless connection stats
 @threaded_tool
 def get_wireless_connection_stats(network_id: str, timespan: int = 86400) -> str:
     """Get wireless connection statistics"""
     stats = dashboard.wireless.getNetworkWirelessConnectionStats(network_id, timespan=timespan)
-    return json.dumps(stats, indent=2)
+    return to_json(stats)
 
 # Get wireless client connectivity events
 @threaded_tool
 def get_wireless_client_connectivity_events(network_id: str, client_id: str, timespan: int = 86400) -> str:
     """Get wireless client connectivity events"""
     events = dashboard.wireless.getNetworkWirelessClientConnectivityEvents(network_id, client_id, timespan=timespan)
-    return json.dumps(events, indent=2)
+    return to_json(events)
 
 #######################
 # ADVANCED SWITCH TOOLS
@@ -917,7 +918,7 @@ def get_wireless_client_connectivity_events(network_id: str, client_id: str, tim
 def get_switch_port_statuses(serial: str) -> str:
     """Get switch port statuses"""
     statuses = dashboard.switch.getDeviceSwitchPortsStatuses(serial)
-    return json.dumps(statuses, indent=2)
+    return to_json(statuses)
 
 # Cycle switch ports
 @threaded_tool
@@ -927,14 +928,14 @@ def cycle_switch_ports(serial: str, ports: list[str]) -> str:
     if blocked:
         return blocked
     result = dashboard.switch.cycleDeviceSwitchPorts(serial, ports)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get switch access control lists
 @threaded_tool
 def get_switch_access_control_lists(network_id: str) -> str:
     """Get switch access control lists"""
     acls = dashboard.switch.getNetworkSwitchAccessControlLists(network_id)
-    return json.dumps(acls, indent=2)
+    return to_json(acls)
 
 # Update switch access control lists
 @threaded_tool
@@ -944,14 +945,14 @@ def update_switch_access_control_lists(network_id: str, rules: list[dict]) -> st
     if blocked:
         return blocked
     result = dashboard.switch.updateNetworkSwitchAccessControlLists(network_id, rules)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get switch QoS rules
 @threaded_tool
 def get_switch_qos_rules(network_id: str) -> str:
     """Get switch QoS rules"""
     rules = dashboard.switch.getNetworkSwitchQosRules(network_id)
-    return json.dumps(rules, indent=2)
+    return to_json(rules)
 
 # Create switch QoS rule
 @threaded_tool
@@ -972,7 +973,7 @@ def create_switch_qos_rule(network_id: str, vlan: int, protocol: str, src_port: 
         )
     }
     result = dashboard.switch.createNetworkSwitchQosRule(network_id, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 #######################
 # ADVANCED APPLIANCE TOOLS
@@ -983,7 +984,7 @@ def create_switch_qos_rule(network_id: str, vlan: int, protocol: str, src_port: 
 def get_appliance_vpn_site_to_site(network_id: str) -> str:
     """Get appliance VPN site-to-site configuration"""
     vpn = dashboard.appliance.getNetworkApplianceVpnSiteToSiteVpn(network_id)
-    return json.dumps(vpn, indent=2)
+    return to_json(vpn)
 
 # Update appliance VPN site-to-site
 @threaded_tool
@@ -994,14 +995,14 @@ def update_appliance_vpn_site_to_site(network_id: str, mode: str, hubs: Optional
         return blocked
     kwargs = {'mode': mode, **_build_kwargs(hubs=hubs, subnets=subnets)}
     result = dashboard.appliance.updateNetworkApplianceVpnSiteToSiteVpn(network_id, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get appliance content filtering
 @threaded_tool
 def get_appliance_content_filtering(network_id: str) -> str:
     """Get appliance content filtering settings"""
     filtering = dashboard.appliance.getNetworkApplianceContentFiltering(network_id)
-    return json.dumps(filtering, indent=2)
+    return to_json(filtering)
 
 # Update appliance content filtering
 @threaded_tool
@@ -1023,21 +1024,21 @@ def update_appliance_content_filtering(network_id: str, allowed_urls: Optional[l
         kwargs['youtubeRestrictedForMature'] = youtube_restricted_for_mature
     
     result = dashboard.appliance.updateNetworkApplianceContentFiltering(network_id, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get appliance security events
 @threaded_tool
 def get_appliance_security_events(network_id: str, timespan: int = 86400) -> str:
     """Get appliance security events"""
     events = dashboard.appliance.getNetworkApplianceSecurityEvents(network_id, timespan=timespan)
-    return json.dumps(events, indent=2)
+    return to_json(events)
 
 # Get appliance traffic shaping
 @threaded_tool
 def get_appliance_traffic_shaping(network_id: str) -> str:
     """Get appliance traffic shaping settings"""
     shaping = dashboard.appliance.getNetworkApplianceTrafficShaping(network_id)
-    return json.dumps(shaping, indent=2)
+    return to_json(shaping)
 
 # Update appliance traffic shaping
 @threaded_tool
@@ -1051,7 +1052,7 @@ def update_appliance_traffic_shaping(network_id: str, global_bandwidth_limits: O
         kwargs['globalBandwidthLimits'] = global_bandwidth_limits
     
     result = dashboard.appliance.updateNetworkApplianceTrafficShaping(network_id, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 #######################
 # CAMERA TOOLS
@@ -1062,21 +1063,21 @@ def update_appliance_traffic_shaping(network_id: str, global_bandwidth_limits: O
 def get_camera_analytics_live(serial: str) -> str:
     """Get live camera analytics"""
     analytics = dashboard.camera.getDeviceCameraAnalyticsLive(serial)
-    return json.dumps(analytics, indent=2)
+    return to_json(analytics)
 
 # Get camera analytics overview
 @threaded_tool
 def get_camera_analytics_overview(serial: str, timespan: int = 86400) -> str:
     """Get camera analytics overview"""
     overview = dashboard.camera.getDeviceCameraAnalyticsOverview(serial, timespan=timespan)
-    return json.dumps(overview, indent=2)
+    return to_json(overview)
 
 # Get camera analytics zones
 @threaded_tool
 def get_camera_analytics_zones(serial: str) -> str:
     """Get camera analytics zones"""
     zones = dashboard.camera.getDeviceCameraAnalyticsZones(serial)
-    return json.dumps(zones, indent=2)
+    return to_json(zones)
 
 # Generate camera snapshot
 @threaded_tool
@@ -1090,14 +1091,14 @@ def generate_camera_snapshot(serial: str, timestamp: Optional[str] = None) -> st
         kwargs['timestamp'] = timestamp
     
     result = dashboard.camera.generateDeviceCameraSnapshot(serial, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get camera sense
 @threaded_tool
 def get_camera_sense(serial: str) -> str:
     """Get camera sense configuration"""
     sense = dashboard.camera.getDeviceCameraSense(serial)
-    return json.dumps(sense, indent=2)
+    return to_json(sense)
 
 # Update camera sense
 @threaded_tool
@@ -1115,7 +1116,7 @@ def update_camera_sense(serial: str, sense_enabled: Optional[bool] = None, mqtt_
         kwargs['audioDetection'] = audio_detection
     
     result = dashboard.camera.updateDeviceCameraSense(serial, **kwargs)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 #######################
 # NETWORK AUTOMATION TOOLS
@@ -1130,7 +1131,7 @@ def create_action_batch(org_id: str, actions: list[dict], confirmed: bool = True
         return blocked
     organization_id = org_id or MERAKI_ORG_ID
     result = dashboard.organizations.createOrganizationActionBatch(organization_id, actions, confirmed=confirmed, synchronous=synchronous)
-    return json.dumps(result, indent=2)
+    return to_json(result)
 
 # Get action batch status
 @threaded_tool
@@ -1138,7 +1139,7 @@ def get_action_batch_status(org_id: str, batch_id: str) -> str:
     """Get action batch status"""
     organization_id = org_id or MERAKI_ORG_ID
     status = dashboard.organizations.getOrganizationActionBatch(organization_id, batch_id)
-    return json.dumps(status, indent=2)
+    return to_json(status)
 
 # Get action batches
 @threaded_tool
@@ -1146,7 +1147,7 @@ def get_action_batches(org_id: Optional[str] = None) -> str:
     """Get all action batches for an organization"""
     organization_id = org_id or MERAKI_ORG_ID
     batches = dashboard.organizations.getOrganizationActionBatches(organization_id)
-    return json.dumps(batches, indent=2)
+    return to_json(batches)
 
 # Define resources
 #Add a dynamic greeting resource

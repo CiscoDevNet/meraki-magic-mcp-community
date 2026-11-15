@@ -184,6 +184,8 @@ MAX_PER_PAGE=100                 # Max items per page (default: 100)
 RESPONSE_CACHE_DIR=.meraki_cache # Cache directory (default: .meraki_cache)
 ```
 
+Tool responses are returned as compact JSON (no indentation), which uses roughly 40% fewer tokens than pretty-printed output on typical list responses. `MAX_RESPONSE_TOKENS` is measured against that same compact text. Cached files on disk remain indented for reading with `jq` or an editor.
+
 ### Example - Large Response:
 ```
 # Request with large result set

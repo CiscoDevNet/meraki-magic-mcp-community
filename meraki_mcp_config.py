@@ -98,6 +98,15 @@ _TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 _FALSE_VALUES = {"0", "false", "no", "n", "off"}
 
 
+def to_json(data: Any) -> str:
+    """Serialize a tool response as compact JSON.
+
+    Tool output is read by a model, not a person: indentation carries no information
+    and costs roughly 40% more tokens on typical Meraki list responses.
+    """
+    return json.dumps(data, separators=(",", ":"))
+
+
 def parse_bool(value: Any, default: bool = False) -> bool:
     """Parse common environment/tool boolean values."""
     if value is None:
@@ -184,7 +193,7 @@ def guard_write_operation(
     confirm_destructive_action: Any = False,
 ) -> str | None:
     if read_only_mode and is_write_operation(method_name):
-        return json.dumps(write_blocked_payload(method_name), indent=2)
+        return to_json(write_blocked_payload(method_name))
     if is_destructive_operation(method_name) and not parse_bool(confirm_destructive_action, default=False):
-        return json.dumps(destructive_confirmation_required_payload(method_name), indent=2)
+        return to_json(destructive_confirmation_required_payload(method_name))
     return None
