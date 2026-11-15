@@ -594,6 +594,116 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual("getOrganizationNetworks", module.dashboard.calls[-1]["method"])
 
 
+class ManualServerSdkCompatibilityTests(unittest.TestCase):
+    def test_every_manual_tool_calls_a_method_the_installed_sdk_provides(self):
+        import re
+
+        try:
+            import meraki
+        except ImportError:
+            self.skipTest("Meraki SDK is not installed")
+
+        dashboard = meraki.DashboardAPI(api_key="dummy", suppress_logging=True)
+        source = (ROOT / "meraki-mcp.py").read_text()
+        calls = set(re.findall(r"dashboard\.(\w+)\.(\w+)", source))
+        self.assertGreater(len(calls), 50)
+        missing = sorted(
+            f"{section}.{method}"
+            for section, method in calls
+            if not callable(getattr(getattr(dashboard, section, None), method, None))
+        )
+        self.assertEqual([], missing)
+
+    def test_guarded_method_names_exist_in_the_installed_sdk(self):
+        import re
+
+        try:
+            import meraki
+        except ImportError:
+            self.skipTest("Meraki SDK is not installed")
+
+        dashboard = meraki.DashboardAPI(api_key="dummy", suppress_logging=True)
+        sdk_methods = {
+            method
+            for section in dir(dashboard)
+            if not section.startswith("_") and hasattr(getattr(dashboard, section), "_session")
+            for method in dir(getattr(dashboard, section))
+        }
+        source = (ROOT / "meraki-mcp.py").read_text()
+        guarded = set(re.findall(r'_guard_write\("(\w+)"', source))
+        self.assertEqual([], sorted(guarded - sdk_methods))
+
+
+class ManualServerFixedToolTests(unittest.TestCase):
+    def _load(self, name, env=None):
+        environ = {"MERAKI_API_KEY": "dummy", "READ_ONLY_MODE": "false"}
+        environ.update(env or {})
+        return patch.dict(os.environ, environ, clear=True)
+
+    def test_device_status_and_uplink_filter_org_wide_results_by_serial(self):
+        with self._load("a", {"MERAKI_ORG_ID": "111"}), fake_runtime_modules():
+            module = load_script_module("meraki-mcp.py", "test_manual_device_status")
+            rows = [{"serial": "Q2XX-OTHER", "status": "offline"}, {"serial": "Q2XX-1", "status": "online"}]
+            seen = []
+
+            def fake(organization_id, **kwargs):
+                seen.append((organization_id, kwargs))
+                return rows
+
+            module.dashboard.organizations.getOrganizationDevicesStatuses = fake
+            module.dashboard.organizations.getOrganizationUplinksStatuses = fake
+
+            self.assertEqual(rows[1], json.loads(module.get_device_status("Q2XX-1")))
+            self.assertEqual(rows[1], json.loads(module.get_device_uplink("Q2XX-1", org_id="222")))
+            missing = json.loads(module.get_device_uplink("Q2XX-NONE"))
+
+        self.assertEqual(("111", {"total_pages": "all", "serials": ["Q2XX-1"]}), seen[0])
+        self.assertEqual("222", seen[1][0])
+        self.assertEqual("Q2XX-NONE", missing["serial"])
+        self.assertIn("error", missing)
+
+    def test_device_status_looks_up_organization_when_not_configured(self):
+        with self._load("b"), fake_runtime_modules():
+            module = load_script_module("meraki-mcp.py", "test_manual_device_org_lookup")
+            module.dashboard.devices.getDevice = lambda serial: {"serial": serial, "networkId": "N_1"}
+            module.dashboard.networks.getNetwork = lambda network_id: {"id": network_id, "organizationId": "999"}
+            seen = []
+            module.dashboard.organizations.getOrganizationDevicesStatuses = (
+                lambda organization_id, **kwargs: seen.append(organization_id) or [{"serial": "Q2XX-1"}]
+            )
+            self.assertEqual({"serial": "Q2XX-1"}, json.loads(module.get_device_status("Q2XX-1")))
+        self.assertEqual(["999"], seen)
+
+    def test_remaining_fixed_tools_call_current_sdk_methods(self):
+        with self._load("c", {"MERAKI_ORG_ID": "111"}), fake_runtime_modules():
+            module = load_script_module("meraki-mcp.py", "test_manual_fixed_tools")
+            module.get_organization_status()
+            module.get_switch_vlans("N_1")
+            module.get_security_center("N_1")
+            module.create_switch_vlan("N_1", 20, "Voice", subnet="10.0.20.0/24", appliance_ip="10.0.20.1")
+            calls = module.dashboard.calls
+
+        self.assertEqual(
+            [
+                ("organizations", "getOrganizationDevicesStatusesOverview"),
+                ("appliance", "getNetworkApplianceVlans"),
+                ("appliance", "getNetworkApplianceSecurityEvents"),
+                ("appliance", "createNetworkApplianceVlan"),
+            ],
+            [(call["section"], call["method"]) for call in calls],
+        )
+        self.assertEqual({"timespan": 86400, "perPage": 100}, calls[2]["kwargs"])
+        self.assertEqual(("N_1", "20", "Voice"), calls[3]["args"])
+        self.assertEqual({"subnet": "10.0.20.0/24", "applianceIp": "10.0.20.1"}, calls[3]["kwargs"])
+
+    def test_create_vlan_is_blocked_in_read_only_mode(self):
+        with self._load("d", {"READ_ONLY_MODE": "true"}), fake_runtime_modules():
+            module = load_script_module("meraki-mcp.py", "test_manual_vlan_read_only")
+            response = json.loads(module.create_switch_vlan("N_1", 20, "Voice"))
+            self.assertEqual("Write operation blocked - READ_ONLY_MODE is enabled", response["error"])
+            self.assertEqual([], module.dashboard.calls)
+
+
 class ManualServerSafetyTests(unittest.TestCase):
     def test_manual_dashboard_receives_configured_base_url(self):
         with patch.dict(

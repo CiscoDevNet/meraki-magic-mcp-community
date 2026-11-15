@@ -76,6 +76,25 @@ def _build_kwargs(**params) -> dict:
 def _guard_write(method_name: str, confirm_destructive_action: bool = False) -> str | None:
     return guard_write_operation(method_name, READ_ONLY_MODE, confirm_destructive_action)
 
+def _organization_id_for_device(serial: str, org_id: Optional[str] = None) -> str:
+    """Return the given or configured organization ID, else look it up from the device's network."""
+    if org_id or MERAKI_ORG_ID:
+        return org_id or MERAKI_ORG_ID
+    device = dashboard.devices.getDevice(serial)
+    network_id = device.get("networkId")
+    if not network_id:
+        raise ValueError(
+            f"Device {serial} is not assigned to a network; pass org_id or set MERAKI_ORG_ID"
+        )
+    return dashboard.networks.getNetwork(network_id)["organizationId"]
+
+def _single_device_result(results: list, serial: str, not_found_message: str) -> str:
+    """Return the entry for serial from an organization-wide list, or a not-found error."""
+    for entry in results or []:
+        if entry.get("serial") == serial:
+            return json.dumps(entry, indent=2)
+    return json.dumps({"error": not_found_message, "serial": serial}, indent=2)
+
 # Create async versions of commonly used Meraki API methods
 async_get_organizations = to_async(dashboard.organizations.getOrganizations)
 async_get_organization = to_async(dashboard.organizations.getOrganization)
@@ -268,9 +287,9 @@ def delete_network(network_id: str, confirm_destructive_action: bool = False) ->
 # Get organization status
 @mcp.tool()
 def get_organization_status(org_id: Optional[str] = None) -> str:
-    """Get the status and health of an organization"""
+    """Get the status and health of an organization (device counts by status and product type)"""
     organization_id = org_id or MERAKI_ORG_ID
-    status = dashboard.organizations.getOrganizationStatus(organization_id)
+    status = dashboard.organizations.getOrganizationDevicesStatusesOverview(organization_id)
     return json.dumps(status, indent=2)
 
 # Get organization inventory
@@ -490,17 +509,25 @@ def get_device_clients(serial: str, timespan: int = 86400) -> str:
 
 # Get device status
 @mcp.tool()
-def get_device_status(serial: str) -> str:
-    """Get the current status of a device"""
-    status = dashboard.devices.getDeviceStatuses(serial)
-    return json.dumps(status, indent=2)
+def get_device_status(serial: str, org_id: Optional[str] = None) -> str:
+    """Get the current status of a device (online/offline/alerting, IPs, last reported time)"""
+    organization_id = _organization_id_for_device(serial, org_id)
+    statuses = dashboard.organizations.getOrganizationDevicesStatuses(
+        organization_id, total_pages='all', serials=[serial]
+    )
+    return _single_device_result(statuses, serial, "No status found for this device in the organization")
 
 # Get device uplink status
 @mcp.tool()
-def get_device_uplink(serial: str) -> str:
-    """Get the uplink status of a device"""
-    uplink = dashboard.devices.getDeviceUplink(serial)
-    return json.dumps(uplink, indent=2)
+def get_device_uplink(serial: str, org_id: Optional[str] = None) -> str:
+    """Get the uplink status of a device. Only MX, MG and Z series devices report uplinks."""
+    organization_id = _organization_id_for_device(serial, org_id)
+    uplinks = dashboard.organizations.getOrganizationUplinksStatuses(
+        organization_id, total_pages='all', serials=[serial]
+    )
+    return _single_device_result(
+        uplinks, serial, "No uplink status found. Only MX, MG and Z series devices report uplinks"
+    )
 
 #######################
 # WIRELESS TOOLS      #
@@ -568,18 +595,18 @@ def update_switch_port(serial: str, port_id: str, name: Optional[str] = None, ta
     result = dashboard.switch.updateDeviceSwitchPort(serial, port_id, **kwargs)
     return json.dumps(result, indent=2)
 
-# Get switch VLAN settings
+# Get VLANs (the Meraki API defines VLANs on the network's MX security appliance)
 @mcp.tool()
 def get_switch_vlans(network_id: str) -> str:
-    """Get VLANs for a network"""
-    vlans = dashboard.switch.getNetworkSwitchVlans(network_id)
+    """Get VLANs for a network. VLANs are defined on the network's MX security appliance and must be enabled there."""
+    vlans = dashboard.appliance.getNetworkApplianceVlans(network_id)
     return json.dumps(vlans, indent=2)
 
 # Create switch VLAN
 @mcp.tool()
 def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: Optional[str] = None, appliance_ip: Optional[str] = None) -> str:
-    """Create a switch VLAN"""
-    blocked = _guard_write("createNetworkSwitchVlan")
+    """Create a VLAN on the network's MX security appliance. VLANs must be enabled on the appliance."""
+    blocked = _guard_write("createNetworkApplianceVlan")
     if blocked:
         return blocked
     kwargs = {}
@@ -588,7 +615,7 @@ def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: Optiona
     if appliance_ip:
         kwargs['applianceIp'] = appliance_ip
 
-    result = dashboard.switch.createNetworkSwitchVlan(network_id, vlan_id, name, **kwargs)
+    result = dashboard.appliance.createNetworkApplianceVlan(network_id, str(vlan_id), name, **kwargs)
     return json.dumps(result, indent=2)
 
 #######################
@@ -597,9 +624,17 @@ def create_switch_vlan(network_id: str, vlan_id: int, name: str, subnet: Optiona
 
 # Get security center
 @mcp.tool()
-def get_security_center(network_id: str) -> str:
-    """Get security information for a network"""
-    security = dashboard.appliance.getNetworkApplianceSecurityCenter(network_id)
+def get_security_center(network_id: str, timespan: int = 86400, per_page: int = 100) -> str:
+    """Get recent security events (IDS/IPS and malware) for a network.
+
+    Args:
+        network_id: The ID of the network
+        timespan: Lookback window in seconds (default 1 day, max 365 days)
+        per_page: Maximum number of events to return (3-1000, default 100)
+    """
+    security = dashboard.appliance.getNetworkApplianceSecurityEvents(
+        network_id, timespan=timespan, perPage=per_page
+    )
     return json.dumps(security, indent=2)
 
 # Get VPN status
