@@ -3,9 +3,20 @@
 This document outlines security procedures and general policies for the
 `meraki-magic-mcp-community` project.
 
+- [Deployment Guidance](#deployment-guidance)
 - [Reporting a Bug](#reporting-a-bug)
 - [Disclosure Policy](#disclosure-policy)
 - [Comments on this Policy](#comments-on-this-policy)
+
+## Deployment Guidance
+
+The MCP server acts with the permissions of the Meraki API key it is given.
+
+- **Read-only mode** is on by default (`READ_ONLY_MODE=true`). Turn it off only when you intend to make changes, and prefer an API key for a read-only dashboard administrator when writes are never needed.
+- **stdio transport** (the default) is only reachable by the local MCP client that starts the server.
+- **HTTP and SSE transports** expose every tool to anyone who can reach the port. Keep `MCP_HOST=127.0.0.1` unless remote access is required, set `MCP_AUTH_TOKEN` to require `Authorization: Bearer <token>` on every request, and terminate TLS at a reverse proxy for access across a network.
+- **Docker**: the image runs as an unprivileged user, and the default `docker-compose.yml` publishes the port on the host's loopback interface only.
+- **Cached responses** can contain sensitive configuration. They are written with owner-only permissions and pruned automatically; set `ENABLE_FILE_CACHING=false` on shared hosts if you do not need them.
 
 ## Reporting a Bug
 

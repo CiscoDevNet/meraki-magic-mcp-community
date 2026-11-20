@@ -12,10 +12,15 @@ from typing import Dict, List, Optional, Any, TypedDict, Union, Callable
 from pydantic import BaseModel, Field
 from mcp.server.fastmcp import FastMCP
 from meraki_mcp_config import (
+    HTTP_TRANSPORTS,
+    build_http_app,
+    get_auth_token,
     get_meraki_base_url,
     get_meraki_caller,
     get_read_only_mode,
     guard_write_operation,
+    normalize_transport,
+    serve_http,
     to_json,
 )
 
@@ -1156,12 +1161,16 @@ def greeting(name: str) -> str:
     """Greet a user by name"""
     return f"Hello {name}!"
 
-# Module-level ASGI app for external uvicorn invocation
-app = mcp.streamable_http_app() if MCP_TRANSPORT in ("http", "streamable-http") else None
+# Module-level ASGI app for HTTP transports, also usable with an external uvicorn.
+# It requires "Authorization: Bearer <MCP_AUTH_TOKEN>" when MCP_AUTH_TOKEN is set.
+app = build_http_app(mcp, MCP_TRANSPORT, MCP_HOST) if MCP_TRANSPORT in HTTP_TRANSPORTS else None
 
 if __name__ == "__main__":
-    transport = "streamable-http" if MCP_TRANSPORT == "http" else MCP_TRANSPORT
+    transport = normalize_transport(MCP_TRANSPORT)
     print(f"Starting Meraki Magic MCP ({transport} transport)", file=sys.stderr)
-    if transport in ("streamable-http", "sse"):
-        print(f"Listening on {MCP_HOST}:{MCP_PORT}", file=sys.stderr)
-    mcp.run(transport=transport)
+    if app is not None:
+        auth = "bearer token required" if get_auth_token() else "no authentication"
+        print(f"Listening on {MCP_HOST}:{MCP_PORT} ({auth})", file=sys.stderr)
+        serve_http(app, MCP_HOST, MCP_PORT)
+    else:
+        mcp.run(transport=transport)

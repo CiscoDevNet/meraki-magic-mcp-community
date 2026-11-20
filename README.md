@@ -221,12 +221,15 @@ Run the MCP server over HTTP for remote access or shared team use:
 export MERAKI_API_KEY="your_api_key_here"
 export MERAKI_ORG_ID="your_org_id_here"
 export MCP_TRANSPORT=http
-export MCP_HOST=127.0.0.1  # Use 0.0.0.0 for remote access
+export MCP_HOST=127.0.0.1  # Use 0.0.0.0 for remote access, together with MCP_AUTH_TOKEN
 export MCP_PORT=8000
+export MCP_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 python meraki-mcp-dynamic.py
 # Server available at http://127.0.0.1:8000/mcp
 ```
+
+With `MCP_AUTH_TOKEN` set, every request must send `Authorization: Bearer <token>`. HTTP mode exposes every tool with your Meraki API key, so always set a token when other machines can reach the port, and use a TLS reverse proxy across a network.
 
 Connect Claude Desktop to an HTTP server using [mcp-remote](https://www.npmjs.com/package/mcp-remote) (requires Node.js):
 
@@ -235,7 +238,13 @@ Connect Claude Desktop to an HTTP server using [mcp-remote](https://www.npmjs.co
   "mcpServers": {
     "Meraki_Magic_MCP": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://127.0.0.1:8000/mcp"]
+      "args": [
+        "-y", "mcp-remote", "http://127.0.0.1:8000/mcp",
+        "--header", "Authorization:${AUTH_HEADER}"
+      ],
+      "env": {
+        "AUTH_HEADER": "Bearer your_token_here"
+      }
     }
   }
 }
@@ -249,8 +258,10 @@ The fastest way to deploy remotely:
 export MERAKI_API_KEY="your_api_key_here"
 export MERAKI_ORG_ID="your_org_id_here"
 docker compose up -d
-# Server available at http://localhost:8000/mcp
+# Server available at http://localhost:8000/mcp (published on the host's loopback interface only)
 ```
+
+The container runs as an unprivileged user. To accept connections from other machines, set `MCP_PUBLISH_HOST=0.0.0.0` and `MCP_AUTH_TOKEN` before `docker compose up -d`.
 
 **📖 Full HTTP & Docker instructions: [INSTALL.md](INSTALL.md#http-transport-mode)**
 

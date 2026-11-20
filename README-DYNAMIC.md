@@ -129,10 +129,13 @@ export MERAKI_API_KEY="your_api_key_here"
 export MCP_TRANSPORT=http
 export MCP_HOST=0.0.0.0
 export MCP_PORT=8000
+export MCP_AUTH_TOKEN="your_token_here"  # required header: Authorization: Bearer <token>
 
 python meraki-mcp-dynamic.py
 # Server at http://<host>:8000/mcp
 ```
+
+Always set `MCP_AUTH_TOKEN` when binding to `0.0.0.0`; the server warns at startup if it is missing. Use a TLS reverse proxy across a network.
 
 ### Option 3: Docker
 
@@ -140,7 +143,7 @@ python meraki-mcp-dynamic.py
 export MERAKI_API_KEY="your_api_key_here"
 export MERAKI_ORG_ID="your_org_id_here"
 docker compose up -d
-# Server at http://localhost:8000/mcp
+# Server at http://localhost:8000/mcp (host loopback only; set MCP_PUBLISH_HOST=0.0.0.0 and MCP_AUTH_TOKEN for remote access)
 ```
 
 Connect Claude Desktop to HTTP/Docker servers using mcp-remote:
@@ -149,11 +152,19 @@ Connect Claude Desktop to HTTP/Docker servers using mcp-remote:
   "mcpServers": {
     "Meraki_Magic_MCP": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://localhost:8000/mcp"]
+      "args": [
+        "-y", "mcp-remote", "http://localhost:8000/mcp",
+        "--header", "Authorization:${AUTH_HEADER}"
+      ],
+      "env": {
+        "AUTH_HEADER": "Bearer your_token_here"
+      }
     }
   }
 }
 ```
+
+Drop the `--header` arguments and the `env` block if the server has no `MCP_AUTH_TOKEN`.
 
 See [INSTALL.md](INSTALL.md#http-transport-mode) for full details.
 

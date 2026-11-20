@@ -375,6 +375,21 @@ By default, the MCP server uses **stdio** transport for direct local connections
 | **http** | Remote/Docker deployments via StreamableHTTP | `MCP_TRANSPORT=http` |
 | **sse** | Clients that only support Server-Sent Events | `MCP_TRANSPORT=sse` |
 
+### Securing HTTP mode
+
+The HTTP and SSE transports expose every tool, with your Meraki API key, to anyone who can reach the port. Set `MCP_AUTH_TOKEN` to require a bearer token on every request:
+
+```bash
+# Generate a random token once and keep it somewhere safe
+export MCP_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```
+
+Requests without `Authorization: Bearer <token>` get `401 Unauthorized`. Clients then need the same token; the mcp-remote examples below show how.
+
+- Keep `MCP_HOST=127.0.0.1` (the default) unless other machines must connect. The server warns at startup when it listens on another address without a token.
+- The token is sent in plain text over HTTP. For access across a network, put the server behind a reverse proxy that terminates TLS (HTTPS).
+- Start HTTP mode with `python meraki-mcp-dynamic.py` as shown below. `MCP_AUTH_TOKEN` is enforced by the server's own startup code, so a launcher that builds its own HTTP app does not apply it.
+
 ### Running in HTTP Mode (Local)
 
 **Step 1: Export environment variables**
@@ -385,6 +400,7 @@ export MERAKI_ORG_ID="your_org_id_here"
 export MCP_TRANSPORT=http
 export MCP_HOST=127.0.0.1
 export MCP_PORT=8000
+export MCP_AUTH_TOKEN="your_token_here"  # optional on 127.0.0.1, required for remote access
 ```
 
 **Step 2: Start the server**
@@ -410,25 +426,34 @@ Requires [Node.js](https://nodejs.org/) installed. Edit Claude Desktop config:
   "mcpServers": {
     "Meraki_Magic_MCP": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://127.0.0.1:8000/mcp"]
+      "args": [
+        "-y", "mcp-remote", "http://127.0.0.1:8000/mcp",
+        "--header", "Authorization:${AUTH_HEADER}"
+      ],
+      "env": {
+        "AUTH_HEADER": "Bearer your_token_here"
+      }
     }
   }
 }
 ```
 
+Replace `your_token_here` with the value of `MCP_AUTH_TOKEN`. Without a token, drop the `--header` arguments and the `env` block. The header argument has no space after the colon because some clients (including Claude Desktop on Windows) mangle spaces in `args`.
+
 Restart Claude Desktop after updating the config.
 
 ### Remote / Network Deployment
 
-To accept connections from other machines, bind to all interfaces:
+To accept connections from other machines, bind to all interfaces and require a token:
 
 ```bash
 export MCP_TRANSPORT=http
 export MCP_HOST=0.0.0.0
 export MCP_PORT=8000
+export MCP_AUTH_TOKEN="your_token_here"
 ```
 
-Remote clients connect via `http://<server-ip>:8000/mcp`.
+Remote clients connect via `http://<server-ip>:8000/mcp` with `Authorization: Bearer <token>`. Use a reverse proxy with TLS so the token and Meraki data are not sent in plain text.
 
 ---
 
@@ -454,29 +479,31 @@ Do not keep credentials in a project `.env` file. Compose interpolates `MERAKI_A
 docker compose up -d
 ```
 
-The server starts on `http://localhost:8000/mcp` using the dynamic MCP (full API).
+The server starts on `http://localhost:8000/mcp` using the dynamic MCP (full API). The default `docker-compose.yml` publishes the port on the host's loopback interface only, so other machines cannot connect.
+
+To accept connections from other machines, publish on all interfaces and require a token:
+```bash
+export MCP_PUBLISH_HOST=0.0.0.0
+export MCP_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+docker compose up -d
+```
 
 **Step 3: Verify**
 ```bash
 curl -s -X POST http://localhost:8000/mcp \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
 ```
 
-You should see a JSON response with `serverInfo.name` = "Meraki Magic MCP - Full API".
+You should see a JSON response with `serverInfo.name` = "Meraki Magic MCP - Full API". Leave out the `Authorization` line if `MCP_AUTH_TOKEN` is not set.
 
 **Step 4: Connect Claude Desktop**
-```json
-{
-  "mcpServers": {
-    "Meraki_Magic_MCP": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "http://localhost:8000/mcp"]
-    }
-  }
-}
-```
+
+Use the mcp-remote configuration from [Running in HTTP Mode](#running-in-http-mode-local) with the URL `http://localhost:8000/mcp`.
+
+The container runs as an unprivileged user (UID 10001). If you upgrade from an image that ran as root and the existing `meraki-cache` volume already holds cached files, it stays owned by root: the server logs a warning and runs without file caching. Recreate the volume with `docker compose down -v` (cached files are disposable) to restore it.
 
 ### Docker Configuration
 
@@ -485,7 +512,9 @@ Environment variables can be exported in the host shell (used by `docker compose
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_TRANSPORT` | `http` | Transport mode (http, stdio, sse) |
-| `MCP_HOST` | `0.0.0.0` | Bind address |
+| `MCP_HOST` | `0.0.0.0` | Bind address inside the container |
+| `MCP_AUTH_TOKEN` | *(unset)* | Bearer token required on every HTTP request; strongly recommended |
+| `MCP_PUBLISH_HOST` | `127.0.0.1` | Host interface `docker compose` publishes port 8000 on; set `0.0.0.0` for remote access |
 | `MCP_PORT` | `8000` | Bind port |
 | `MCP_SERVER` | `dynamic` | Server file: `dynamic` (full API) or `manual` (curated tools) |
 | `MERAKI_API_KEY` | *(required)* | Your Meraki Dashboard API key |
@@ -509,16 +538,18 @@ docker compose logs -f
 # Stop
 docker compose down
 
-# Run manually (without compose)
+# Run manually (without compose); publishes on the host's loopback interface only
 docker run -d --name meraki-mcp \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
+  -e MCP_AUTH_TOKEN="your-token" \
   -e MERAKI_API_KEY="your-key" \
   -e MERAKI_ORG_ID="your-org-id" \
   meraki-magic-mcp-community
 
 # Use the manual (curated) server instead
 docker run -d --name meraki-mcp \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
+  -e MCP_AUTH_TOKEN="your-token" \
   -e MERAKI_API_KEY="your-key" \
   -e MCP_SERVER=manual \
   meraki-magic-mcp-community
@@ -698,7 +729,7 @@ pip install -r requirements.txt
 
 **Cause:** Large responses are saved under `RESPONSE_CACHE_DIR`, which defaults to `.meraki_cache` inside the project folder. Some MCP hosts run servers in a sandbox where that folder is not writable.
 
-**Behavior:** The server still starts. It logs `WARNING: cannot create response cache directory ...` and runs with file caching disabled, so large responses are returned in full instead of being saved and previewed. Lower `MAX_PER_PAGE` or use narrower queries if they are too large for the conversation.
+**Behavior:** The server still starts. It logs `WARNING: response cache directory ... is unusable` and runs with file caching disabled, so large responses are returned in full instead of being saved and previewed. Lower `MAX_PER_PAGE` or use narrower queries if they are too large for the conversation.
 
 **Solution:** Point the cache at a writable location in the MCP client `env` block, or turn file caching off:
 ```json

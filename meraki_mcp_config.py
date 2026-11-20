@@ -2,9 +2,11 @@
 #
 # SPDX-License-Identifier: MIT
 
+import hmac
 import json
 import os
-from typing import Any, MutableMapping
+import sys
+from typing import Any, Callable, MutableMapping
 
 
 DEFAULT_MERAKI_BASE_URL = "https://api.meraki.com/api/v1"
@@ -217,3 +219,104 @@ def guard_write_operation(
     if is_destructive_operation(method_name) and not parse_bool(confirm_destructive_action, default=False):
         return to_json(destructive_confirmation_required_payload(method_name))
     return None
+
+
+###################
+# HTTP TRANSPORT SECURITY
+###################
+
+MCP_AUTH_TOKEN_ENV = "MCP_AUTH_TOKEN"
+HTTP_TRANSPORTS = ("http", "streamable-http", "sse")
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+MIN_AUTH_TOKEN_LENGTH = 32
+
+
+def get_auth_token() -> str | None:
+    """Return the bearer token required by the HTTP transports, or None when unset."""
+    token = os.getenv(MCP_AUTH_TOKEN_ENV, "").strip()
+    return token or None
+
+
+def normalize_transport(transport: str) -> str:
+    """Map the MCP_TRANSPORT value to the name FastMCP uses."""
+    return "streamable-http" if transport == "http" else transport
+
+
+class BearerTokenMiddleware:
+    """ASGI middleware that rejects HTTP requests without the configured bearer token.
+
+    Every HTTP request must send ``Authorization: Bearer <token>``. Lifespan events
+    pass through so the MCP session manager can start and stop normally.
+    """
+
+    def __init__(self, app: Callable, token: str):
+        if not token:
+            raise ValueError("token must not be empty")
+        self.app = app
+        self._token = token.encode()
+
+    def _is_authorized(self, scope: dict) -> bool:
+        for name, value in scope.get("headers") or []:
+            if name.lower() == b"authorization":
+                scheme, _, credentials = value.strip().partition(b" ")
+                return scheme.lower() == b"bearer" and hmac.compare_digest(credentials.strip(), self._token)
+        return False
+
+    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
+        if scope["type"] not in ("http", "websocket") or self._is_authorized(scope):
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+
+        body = to_json({
+            "error": "unauthorized",
+            "message": f"Send 'Authorization: Bearer <token>' with the value of {MCP_AUTH_TOKEN_ENV}",
+        }).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+                (b"www-authenticate", b'Bearer realm="meraki-magic-mcp"'),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+
+def http_security_warnings(host: str, token: str | None) -> list[str]:
+    """Return warnings about an HTTP deployment's exposure, for printing at startup."""
+    warnings = []
+    if token is None and host not in LOOPBACK_HOSTS:
+        warnings.append(
+            f"WARNING: HTTP transport is bound to {host} without authentication. Anyone who can "
+            f"reach this port can use the server with your Meraki API key. Set {MCP_AUTH_TOKEN_ENV} "
+            "to require a bearer token, or bind MCP_HOST to 127.0.0.1. (In Docker, the default "
+            "docker-compose.yml publishes the port on the host's loopback interface only.)"
+        )
+    if token is not None and len(token) < MIN_AUTH_TOKEN_LENGTH:
+        warnings.append(
+            f"WARNING: {MCP_AUTH_TOKEN_ENV} is shorter than {MIN_AUTH_TOKEN_LENGTH} characters. "
+            "Generate a stronger one, e.g. with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
+    return warnings
+
+
+def build_http_app(mcp: Any, transport: str, host: str) -> Callable:
+    """Build the ASGI app for an HTTP transport, requiring MCP_AUTH_TOKEN when it is set."""
+    transport = normalize_transport(transport)
+    app = mcp.sse_app() if transport == "sse" else mcp.streamable_http_app()
+    token = get_auth_token()
+    for warning in http_security_warnings(host, token):
+        print(warning, file=sys.stderr)
+    return BearerTokenMiddleware(app, token) if token else app
+
+
+def serve_http(app: Callable, host: str, port: int) -> None:
+    """Serve an ASGI app with uvicorn (the same server FastMCP uses for its HTTP transports)."""
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port, log_level="info")

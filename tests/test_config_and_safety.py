@@ -821,6 +821,31 @@ class FileCacheRetentionTests(unittest.TestCase):
                 self.assertEqual(rows, response)
                 self.assertFalse(json.loads(asyncio.run(module.get_mcp_config()))["file_caching_enabled"])
 
+    def test_existing_unwritable_cache_directory_disables_file_caching(self):
+        if os.name != "posix" or os.geteuid() == 0:
+            self.skipTest("needs a non-root POSIX user to observe directory permissions")
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as parent:
+            cache_dir = Path(parent) / "cache"
+            cache_dir.mkdir(mode=0o500)
+            try:
+                with patch.dict(os.environ, {"MERAKI_API_KEY": "dummy", "RESPONSE_CACHE_DIR": str(cache_dir)},
+                                clear=True), fake_runtime_modules():
+                    module = load_script_module("meraki-mcp-dynamic.py", "test_file_cache_readonly_dir")
+                    self.assertFalse(module.ENABLE_FILE_CACHING)
+            finally:
+                cache_dir.chmod(0o700)
+
+    def test_failed_save_returns_the_full_response(self):
+        with dynamic_module("test_file_cache_save_fails", MAX_RESPONSE_TOKENS="50") as (module, _):
+            rows = [{"serial": f"Q2XX-{i:04d}"} for i in range(200)]
+            module.dashboard.networks = types.SimpleNamespace(getNetworkDevices=lambda networkId: rows)
+            with patch.object(module, "save_response_to_file", side_effect=PermissionError("denied")):
+                response = json.loads(module._call_meraki_method_internal(
+                    "networks", "getNetworkDevices", {"networkId": "N_1"}))
+        self.assertEqual(rows, response)
+
     def test_saved_response_is_private_and_survives_its_own_prune(self):
         with dynamic_module(
             "test_file_cache_save", RESPONSE_CACHE_MAX_MB="0.0001", MAX_RESPONSE_TOKENS="50"
@@ -951,6 +976,162 @@ class CompactOutputTests(unittest.TestCase):
             module.dashboard.networks.getNetwork = lambda network_id: {"id": network_id, "tags": ["a"]}
             raw = module.get_network_details("N_1")
         self.assertEqual('{"id":"N_1","tags":["a"]}', raw)
+
+
+class HttpAuthTests(unittest.TestCase):
+    TOKEN = "t" * 40
+
+    @staticmethod
+    def _call(middleware, scope):
+        """Run an ASGI app on a scope; return (sent messages, whether the inner app ran)."""
+        sent = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        asyncio.run(middleware(scope, receive, send))
+        return sent
+
+    def _middleware(self):
+        calls = []
+
+        async def inner(scope, receive, send):
+            calls.append(scope["type"])
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        return config.BearerTokenMiddleware(inner, self.TOKEN), calls
+
+    def _http(self, *headers):
+        return {"type": "http", "method": "POST", "path": "/mcp", "headers": list(headers)}
+
+    def test_requests_without_the_right_token_are_rejected(self):
+        for headers in [
+            (),
+            ((b"authorization", b"Bearer wrong"),),
+            ((b"authorization", b"Basic " + self.TOKEN.encode()),),
+            ((b"authorization", self.TOKEN.encode()),),
+            ((b"authorization", b"Bearer " + self.TOKEN.encode() + b"x"),),
+            ((b"x-api-key", self.TOKEN.encode()),),
+        ]:
+            with self.subTest(headers=headers):
+                middleware, calls = self._middleware()
+                sent = self._call(middleware, self._http(*headers))
+                self.assertEqual([], calls)
+                self.assertEqual(401, sent[0]["status"])
+                self.assertIn((b"www-authenticate", b'Bearer realm="meraki-magic-mcp"'), sent[0]["headers"])
+                self.assertEqual("unauthorized", json.loads(sent[1]["body"])["error"])
+
+    def test_requests_with_the_token_reach_the_app(self):
+        for value in [b"Bearer ", b"bearer ", b"BEARER  "]:
+            with self.subTest(value=value):
+                middleware, calls = self._middleware()
+                sent = self._call(middleware, self._http((b"Authorization", value + self.TOKEN.encode())))
+                self.assertEqual(["http"], calls)
+                self.assertEqual(200, sent[0]["status"])
+
+    def test_lifespan_passes_through_and_websockets_are_closed(self):
+        middleware, calls = self._middleware()
+        self._call(middleware, {"type": "lifespan"})
+        self.assertEqual(["lifespan"], calls)
+
+        middleware, calls = self._middleware()
+        sent = self._call(middleware, {"type": "websocket", "path": "/mcp", "headers": []})
+        self.assertEqual([], calls)
+        self.assertEqual([{"type": "websocket.close", "code": 1008}], sent)
+
+    def test_empty_token_is_rejected(self):
+        with self.assertRaises(ValueError):
+            config.BearerTokenMiddleware(lambda *args: None, "")
+
+    def test_auth_token_is_read_from_the_environment(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(config.get_auth_token())
+        with patch.dict(os.environ, {"MCP_AUTH_TOKEN": "   "}, clear=True):
+            self.assertIsNone(config.get_auth_token())
+        with patch.dict(os.environ, {"MCP_AUTH_TOKEN": " abc "}, clear=True):
+            self.assertEqual("abc", config.get_auth_token())
+
+    def test_security_warnings(self):
+        self.assertEqual([], config.http_security_warnings("127.0.0.1", None))
+        self.assertEqual([], config.http_security_warnings("0.0.0.0", self.TOKEN))
+        exposed = config.http_security_warnings("0.0.0.0", None)
+        self.assertEqual(1, len(exposed))
+        self.assertIn("without authentication", exposed[0])
+        weak = config.http_security_warnings("127.0.0.1", "short")
+        self.assertEqual(1, len(weak))
+        self.assertIn("shorter than", weak[0])
+
+    def test_build_http_app_wraps_only_when_a_token_is_set(self):
+        class FakeMcp:
+            def streamable_http_app(self):
+                return "streamable"
+
+            def sse_app(self):
+                return "sse"
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual("streamable", config.build_http_app(FakeMcp(), "http", "127.0.0.1"))
+            self.assertEqual("sse", config.build_http_app(FakeMcp(), "sse", "127.0.0.1"))
+        with patch.dict(os.environ, {"MCP_AUTH_TOKEN": self.TOKEN}, clear=True):
+            wrapped = config.build_http_app(FakeMcp(), "streamable-http", "127.0.0.1")
+        self.assertIsInstance(wrapped, config.BearerTokenMiddleware)
+        self.assertEqual("streamable", wrapped.app)
+
+    def test_both_servers_enforce_the_token_on_a_real_mcp_session(self):
+        if not fastmcp_available():
+            self.skipTest("mcp is not installed")
+        from starlette.testclient import TestClient
+
+        initialize = {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "1"}},
+        }
+        headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+        for filename in ["meraki-mcp.py", "meraki-mcp-dynamic.py"]:
+            with self.subTest(filename=filename), patch.dict(
+                os.environ,
+                {"MERAKI_API_KEY": "dummy", "MCP_TRANSPORT": "http", "MCP_AUTH_TOKEN": self.TOKEN,
+                 "ENABLE_FILE_CACHING": "false"},
+                clear=True,
+            ), fake_meraki_module():
+                module = load_script_module(filename, f"test_http_auth_{filename.replace('-', '_')}")
+                # The MCP SDK's DNS-rebinding protection only accepts loopback Host headers
+                with TestClient(module.app, base_url="http://127.0.0.1:8000") as client:
+                    denied = client.post("/mcp", json=initialize, headers=headers)
+                    allowed = client.post(
+                        "/mcp", json=initialize,
+                        headers={**headers, "Authorization": f"Bearer {self.TOKEN}"},
+                    )
+                self.assertEqual(401, denied.status_code)
+                self.assertEqual(200, allowed.status_code)
+                self.assertIn('"serverInfo"', allowed.text)
+
+
+class DeploymentDefaultsTests(unittest.TestCase):
+    def test_container_runs_as_an_unprivileged_user(self):
+        import re
+
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        users = re.findall(r"^USER\s+(\S+)", dockerfile, flags=re.M)
+        self.assertTrue(users, "Dockerfile must set USER")
+        self.assertNotIn(users[-1], ("root", "0"))
+        self.assertIn("meraki_mcp_config.py", dockerfile)
+
+    def test_compose_publishes_on_loopback_by_default_and_passes_the_token(self):
+        compose = (ROOT / "docker-compose.yml").read_text()
+        self.assertIn('"${MCP_PUBLISH_HOST:-127.0.0.1}:8000:8000"', compose)
+        self.assertIn("MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}", compose)
+
+    def test_documented_docker_run_commands_publish_on_loopback(self):
+        import re
+
+        install = (ROOT / "INSTALL.md").read_text()
+        self.assertEqual([], re.findall(r"-p 8000:8000", install))
 
 
 class ManualServerThreadingTests(unittest.TestCase):

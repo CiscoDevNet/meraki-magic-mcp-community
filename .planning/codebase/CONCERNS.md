@@ -6,11 +6,11 @@ This replaces the 2026-03-27 audit. Items from that audit that have since been f
 
 ## Security Considerations
 
-**HTTP transports have no authentication:**
-- Risk: Both servers expose HTTP/SSE transports through `FastMCP` without authentication, authorization, or TLS. `Dockerfile` sets `MCP_HOST=0.0.0.0` and `docker-compose.yml` publishes port `8000` on all host interfaces. Anyone who can reach the port can call every tool with the configured Meraki API key.
-- Files: `meraki-mcp.py`, `meraki-mcp-dynamic.py`, `Dockerfile`, `docker-compose.yml`
-- Current mitigation: `READ_ONLY_MODE` defaults to `true` in both servers, and stdio/loopback are the defaults outside Docker.
-- Recommendations: Publish the compose port on `127.0.0.1` by default, add a bearer-token check for HTTP mode, document TLS termination at a reverse proxy, and run the container as a non-root user.
+**HTTP authentication is optional and there is no TLS:**
+- Risk: The bearer token (`MCP_AUTH_TOKEN`) is opt-in, so an HTTP server bound to a non-loopback address without it is open to anyone who can reach the port. The server does not terminate TLS, so tokens and Meraki data cross the network in plain text unless a reverse proxy adds HTTPS. All holders of the token share one identity; there are no per-user credentials or audit trail.
+- Files: `meraki_mcp_config.py`, `meraki-mcp.py`, `meraki-mcp-dynamic.py`
+- Current mitigation: Startup warning for a non-loopback bind without a token; `docker-compose.yml` publishes on the host loopback by default; `READ_ONLY_MODE` defaults to `true`.
+- Recommendations: Consider refusing to start on a non-loopback address without a token (with an explicit opt-out), and MCP OAuth for multi-user deployments.
 
 **Cached responses on disk contain Meraki data:**
 - Risk: Large dynamic responses are written to `RESPONSE_CACHE_DIR` with the request parameters and full payload, which can include secrets such as SSID pre-shared keys. `get_cached_response` and `list_cached_responses` expose them over MCP.
@@ -81,5 +81,6 @@ This replaces the 2026-03-27 audit. Items from that audit that have since been f
 - No automated tests or CI: `tests/` runs in `.github/workflows/tests.yml` on every pull request.
 - Dependencies declared in two places: `pyproject.toml` is the source of truth and `requirements.txt` is the lockfile generated from it.
 - Unbounded in-memory and file caches: both are bounded.
+- HTTP transports with no authentication option: `MCP_AUTH_TOKEN` enforces a bearer token, Docker publishes on the host loopback by default, and the image runs as a non-root user.
 - Docs referring to tools that do not exist and to outdated endpoint counts: fixed.
 - Credentials loaded from a project `.env` file: the servers read the process environment only.

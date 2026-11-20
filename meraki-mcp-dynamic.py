@@ -20,6 +20,9 @@ from pydantic import Field
 from meraki_mcp_config import (
     CONFIRM_DESTRUCTIVE_ACTION_PARAM,
     SDK_SECTIONS,
+    HTTP_TRANSPORTS,
+    build_http_app,
+    get_auth_token,
     get_meraki_base_url,
     get_meraki_caller,
     get_read_only_mode,
@@ -27,6 +30,8 @@ from meraki_mcp_config import (
     is_read_only_operation,
     is_write_operation,
     pop_destructive_confirmation,
+    normalize_transport,
+    serve_http,
     to_json,
 )
 
@@ -76,12 +81,23 @@ PREVIEW_MAX_ITEMS = 3
 # Cached responses can contain sensitive configuration, so keep the directory private.
 # Some MCP hosts run servers in a sandbox with a read-only filesystem; fall back to
 # running without file caching rather than failing to start.
-if ENABLE_FILE_CACHING:
+def _cache_dir_problem() -> Optional[str]:
+    """Create the cache directory if needed; return why it is unusable, or None if it is usable."""
     try:
         Path(RESPONSE_CACHE_DIR).mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as e:
+        return f"cannot create it ({e})"
+    # An existing directory may belong to another user, e.g. a Docker volume created
+    # by an older image that ran as root
+    if not os.access(RESPONSE_CACHE_DIR, os.W_OK | os.X_OK):
+        return "it is not writable by this process"
+    return None
+
+if ENABLE_FILE_CACHING:
+    _problem = _cache_dir_problem()
+    if _problem:
         print(
-            f"WARNING: cannot create response cache directory '{RESPONSE_CACHE_DIR}' ({e}). "
+            f"WARNING: response cache directory '{RESPONSE_CACHE_DIR}' is unusable: {_problem}. "
             "File caching is disabled; set RESPONSE_CACHE_DIR to a writable path to enable it.",
             file=sys.stderr,
         )
@@ -493,10 +509,16 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
         result_json = to_json(result)
         estimated_tokens = estimate_token_count(result_json)
 
+        filepath = None
         if ENABLE_FILE_CACHING and estimated_tokens > MAX_RESPONSE_TOKENS:
-            # Save full response to file
-            filepath = save_response_to_file(result, section, method, original_params)
+            # Save full response to file; if that fails, fall through and return it in full
+            # rather than losing the data the API already returned
+            try:
+                filepath = save_response_to_file(result, section, method, original_params)
+            except OSError as e:
+                print(f"WARNING: could not save large response to the cache directory: {e}", file=sys.stderr)
 
+        if filepath:
             # Create truncated response with metadata
             truncated_response = create_truncated_response(result, filepath, section, method, original_params)
 
@@ -512,7 +534,7 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
 
             return to_json(truncated_response)
 
-        # Normal response (small enough)
+        # Normal response (small enough, or file caching unavailable)
         response_data = result
         if pagination_limited and isinstance(response_data, dict):
             # Annotate a copy so the SDK's result object is never modified
@@ -1069,12 +1091,16 @@ async def clear_cached_files(older_than_hours: int = 24) -> str:
             "error": str(e)
         })
 
-# Module-level ASGI app for external uvicorn invocation
-app = mcp.streamable_http_app() if MCP_TRANSPORT in ("http", "streamable-http") else None
+# Module-level ASGI app for HTTP transports, also usable with an external uvicorn.
+# It requires "Authorization: Bearer <MCP_AUTH_TOKEN>" when MCP_AUTH_TOKEN is set.
+app = build_http_app(mcp, MCP_TRANSPORT, MCP_HOST) if MCP_TRANSPORT in HTTP_TRANSPORTS else None
 
 if __name__ == "__main__":
-    transport = "streamable-http" if MCP_TRANSPORT == "http" else MCP_TRANSPORT
+    transport = normalize_transport(MCP_TRANSPORT)
     print(f"Starting Meraki Magic MCP - Full API ({transport} transport)", file=sys.stderr)
-    if transport in ("streamable-http", "sse"):
-        print(f"Listening on {MCP_HOST}:{MCP_PORT}", file=sys.stderr)
-    mcp.run(transport=transport)
+    if app is not None:
+        auth = "bearer token required" if get_auth_token() else "no authentication"
+        print(f"Listening on {MCP_HOST}:{MCP_PORT} ({auth})", file=sys.stderr)
+        serve_http(app, MCP_HOST, MCP_PORT)
+    else:
+        mcp.run(transport=transport)
