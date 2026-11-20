@@ -11,6 +11,13 @@
   pip install -r requirements.txt
   ```
 
+- **Dependencies**: `pyproject.toml` is the single source of truth for direct dependencies and their allowed ranges. `requirements.txt` is the lockfile generated from it and is what `pip`, Docker and CI install. Do not edit `requirements.txt` by hand; after changing `pyproject.toml`, or to pick up new releases, regenerate it with [uv](https://docs.astral.sh/uv/) and commit both files:
+  ```bash
+  uv pip compile pyproject.toml -o requirements.txt --universal            # apply pyproject.toml changes, keep other pins
+  uv pip compile pyproject.toml -o requirements.txt --universal --upgrade  # also move every pin to the latest allowed version
+  ```
+  The unit tests fail if the two files disagree.
+
 - **Environment setup**: Do not use a project `.env` file. Set `MERAKI_API_KEY` (required) and optional vars such as `MERAKI_ORG_ID` in the MCP client `env` block, or export them in the process environment:
   ```bash
   export MERAKI_API_KEY="your_api_key_here"
@@ -20,10 +27,10 @@
 ### Quick run examples
 
 ```bash
-# Run the dynamic MCP server (recommended, ~804 endpoints)
+# Run the dynamic MCP server (recommended, full API via call_meraki_api)
 python meraki-mcp-dynamic.py
 
-# Run the manual MCP server (40 curated endpoints)
+# Run the manual MCP server (83 curated tools)
 python meraki-mcp.py
 
 # Run over HTTP transport
@@ -34,6 +41,12 @@ docker compose up -d
 ```
 
 ## Testing instructions
+
+- **Run the unit tests** (no Meraki credentials needed; CI runs the same command on every pull request):
+
+  ```bash
+  python -m unittest discover -s tests -v
+  ```
 
 - **MCP server links**
 

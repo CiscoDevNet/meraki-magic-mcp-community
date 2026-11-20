@@ -10,14 +10,20 @@ import asyncio
 import functools
 import inspect
 import hashlib
+import re
+import tempfile
 import threading
+import time
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
-from mcp.server.fastmcp import FastMCP
+from meraki_mcp_server import MerakiMCP
 from pydantic import Field
 from meraki_mcp_config import (
     CONFIRM_DESTRUCTIVE_ACTION_PARAM,
+    SDK_SECTIONS,
+    HTTP_TRANSPORTS,
+    get_auth_token,
     get_meraki_base_url,
     get_meraki_caller,
     get_read_only_mode,
@@ -25,6 +31,9 @@ from meraki_mcp_config import (
     is_read_only_operation,
     is_write_operation,
     pop_destructive_confirmation,
+    normalize_transport,
+    serve_http,
+    to_json,
 )
 
 # Transport configuration
@@ -33,7 +42,7 @@ MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 
 # Create an MCP server
-mcp = FastMCP("Meraki Magic MCP - Full API", host=MCP_HOST, port=MCP_PORT)
+mcp = MerakiMCP("Meraki Magic MCP - Full API", host=MCP_HOST, port=MCP_PORT)
 
 # Configuration
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY")
@@ -50,19 +59,54 @@ if not MERAKI_API_KEY:
 
 ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "300"))  # 5 minutes default
+CACHE_MAX_ITEMS = int(os.getenv("CACHE_MAX_ITEMS", "500"))  # In-memory entries; 0 = unlimited
 READ_ONLY_MODE = get_read_only_mode()
 
 # Response size management (new)
 MAX_RESPONSE_TOKENS = int(os.getenv("MAX_RESPONSE_TOKENS", "5000"))  # Max tokens in response
+# Seven estimated tokens fit the smallest valid truncation notice.
+if MAX_RESPONSE_TOKENS < 7:
+    raise ValueError("MAX_RESPONSE_TOKENS must be at least 7")
+MAX_RESPONSE_CHARS = 4 * MAX_RESPONSE_TOKENS
 MAX_PER_PAGE = int(os.getenv("MAX_PER_PAGE", "100"))  # Max items per page for paginated endpoints
 ENABLE_FILE_CACHING = os.getenv("ENABLE_FILE_CACHING", "true").lower() == "true"
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _raw_cache_dir = os.getenv("RESPONSE_CACHE_DIR", ".meraki_cache")
 RESPONSE_CACHE_DIR = str(Path(_raw_cache_dir) if Path(_raw_cache_dir).is_absolute() else _SCRIPT_DIR / _raw_cache_dir)
 
+# Retention for cached response files; 0 disables the respective limit
+RESPONSE_CACHE_MAX_AGE_HOURS = float(os.getenv("RESPONSE_CACHE_MAX_AGE_HOURS", "24"))
+RESPONSE_CACHE_MAX_MB = float(os.getenv("RESPONSE_CACHE_MAX_MB", "100"))
+
+# Size cap for the "_preview" of a truncated response (about half the token budget)
+PREVIEW_BUDGET_CHARS = MAX_RESPONSE_TOKENS * 2
+PREVIEW_MAX_ITEMS = 3
+
 # Create cache directory if it doesn't exist
+# Cached responses can contain sensitive configuration, so keep the directory private.
+# Some MCP hosts run servers in a sandbox with a read-only filesystem; fall back to
+# running without file caching rather than failing to start.
+def _cache_dir_problem() -> Optional[str]:
+    """Create the cache directory if needed; return why it is unusable, or None if it is usable."""
+    try:
+        Path(RESPONSE_CACHE_DIR).mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as e:
+        return f"cannot create it ({e})"
+    # An existing directory may belong to another user, e.g. a Docker volume created
+    # by an older image that ran as root
+    if not os.access(RESPONSE_CACHE_DIR, os.W_OK | os.X_OK):
+        return "it is not writable by this process"
+    return None
+
 if ENABLE_FILE_CACHING:
-    Path(RESPONSE_CACHE_DIR).mkdir(exist_ok=True)
+    _problem = _cache_dir_problem()
+    if _problem:
+        print(
+            f"WARNING: response cache directory '{RESPONSE_CACHE_DIR}' is unusable: {_problem}. "
+            "File caching is disabled; set RESPONSE_CACHE_DIR to a writable path to enable it.",
+            file=sys.stderr,
+        )
+        ENABLE_FILE_CACHING = False
 
 # Initialize Meraki API client with optimizations
 dashboard = meraki.DashboardAPI(
@@ -79,48 +123,73 @@ dashboard = meraki.DashboardAPI(
 ###################
 
 class SimpleCache:
-    """Simple in-memory cache with TTL. Thread-safe via threading.Lock."""
+    """In-memory cache with TTL and a size cap. Thread-safe via threading.Lock.
+
+    Entries expire CACHE_TTL_SECONDS after they are stored. Expired entries are purged
+    whenever a value is stored, and when the cache still exceeds CACHE_MAX_ITEMS the
+    oldest entries are evicted, so memory use stays bounded on long-running servers.
+    """
     def __init__(self):
         self._lock = threading.Lock()
-        self.cache = {}
+        self.cache = {}  # insertion-ordered: oldest entry first
         self.timestamps = {}
+        self.backing_files = {}
+
+    def _is_expired(self, key: str, now: float) -> bool:
+        return now - self.timestamps[key] >= CACHE_TTL_SECONDS
+
+    def _delete(self, key: str):
+        del self.cache[key]
+        del self.timestamps[key]
+        self.backing_files.pop(key, None)
 
     def get(self, key: str) -> Optional[Any]:
         """Get cached value if not expired"""
         with self._lock:
             if key in self.cache:
-                if datetime.now() - self.timestamps[key] < timedelta(seconds=CACHE_TTL_SECONDS):
+                backing_file = self.backing_files.get(key)
+                if not self._is_expired(key, time.monotonic()) and (backing_file is None or os.path.isfile(backing_file)):
                     return self.cache[key]
-                else:
-                    # Expired, remove
-                    del self.cache[key]
-                    del self.timestamps[key]
+                self._delete(key)
             return None
 
-    def set(self, key: str, value: Any):
-        """Set cached value"""
+    def set(self, key: str, value: Any, backing_file: Optional[str] = None):
+        """Set cached value, purging expired entries and enforcing the size cap"""
         with self._lock:
+            now = time.monotonic()
+            # Re-insert so the entry moves to the newest position
+            if key in self.cache:
+                self._delete(key)
+            for stale in [k for k in self.cache if self._is_expired(k, now)]:
+                self._delete(stale)
             self.cache[key] = value
-            self.timestamps[key] = datetime.now()
+            self.timestamps[key] = now
+            if backing_file is not None:
+                self.backing_files[key] = backing_file
+            if CACHE_MAX_ITEMS > 0:
+                while len(self.cache) > CACHE_MAX_ITEMS:
+                    self._delete(next(iter(self.cache)))
 
     def clear(self):
         """Clear all cache"""
         with self._lock:
             self.cache.clear()
             self.timestamps.clear()
+            self.backing_files.clear()
 
     def invalidate(self, prefix: str):
         """Remove all cache entries whose key starts with the given prefix."""
         with self._lock:
-            keys_to_delete = [k for k in self.cache if k.startswith(prefix)]
-            for k in keys_to_delete:
-                del self.cache[k]
-                del self.timestamps[k]
+            for k in [k for k in self.cache if k.startswith(prefix)]:
+                self._delete(k)
 
     def stats(self) -> Dict:
         """Get cache statistics"""
+        with self._lock:
+            total_items = len(self.cache)
         return {
-            "total_items": len(self.cache),
+            "total_items": total_items,
+            "max_items": CACHE_MAX_ITEMS,
             "cache_enabled": ENABLE_CACHING,
             "ttl_seconds": CACHE_TTL_SECONDS
         }
@@ -133,25 +202,107 @@ cache = SimpleCache()
 
 def estimate_token_count(text: str) -> int:
     """Rough estimate of token count (4 chars ≈ 1 token)"""
-    return len(text) // 4
+    return (len(text) + 3) // 4
 
 def save_response_to_file(data: Any, section: str, method: str, params: Dict) -> str:
     """Save large response to a file and return the file path"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     param_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
-    filename = f"{section}_{method}_{param_hash}_{timestamp}.json"
-    filepath = os.path.join(RESPONSE_CACHE_DIR, filename)
+    prefix = f"{section}_{method}_{param_hash}_{timestamp}_"
+    # Publish a complete, private file with a unique name, even for concurrent identical calls.
+    temp = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=RESPONSE_CACHE_DIR,
+                                       prefix=prefix, suffix=".tmp", delete=False)
+    pending = Path(temp.name)
+    filepath = str(pending.with_suffix(".json"))
+    try:
+        with temp:
+            json.dump({
+                "cached_at": timestamp,
+                "section": section,
+                "method": method,
+                "parameters": params,
+                "data": data
+            }, temp, indent=2)
+        os.replace(pending, filepath)
+    finally:
+        pending.unlink(missing_ok=True)
 
-    with open(filepath, 'w') as f:
-        json.dump({
-            "cached_at": timestamp,
-            "section": section,
-            "method": method,
-            "parameters": params,
-            "data": data
-        }, f, indent=2)
-
+    prune_response_cache(keep=filepath)
     return filepath
+
+# Older releases used the same envelope and filename without the unique suffix.
+_CACHE_FILENAME = re.compile(
+    r"([A-Za-z0-9]+)_([A-Za-z0-9]+)_[0-9a-f]{8}_(\d{8}_\d{6})(?:_[a-z0-9_]+)?\.json"
+)
+
+
+def response_cache_entries():
+    """Yield only regular files with a cache filename and the matching on-disk envelope."""
+    with os.scandir(RESPONSE_CACHE_DIR) as entries:
+        for entry in entries:
+            match = _CACHE_FILENAME.fullmatch(entry.name)
+            if not match or not entry.is_file(follow_symlinks=False):
+                continue
+            section, method, timestamp = match.groups()
+            header = (f'{{\n  "cached_at": "{timestamp}",\n  "section": "{section}",\n'
+                      f'  "method": "{method}",\n  "parameters": ')
+            try:
+                # Universal newlines also recognize caches written on Windows.
+                with open(entry.path, encoding="ascii", errors="replace") as f:
+                    if f.read(len(header)) != header:
+                        continue
+                stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            yield entry, stat
+
+
+def prune_response_cache(keep: Optional[str] = None) -> Dict[str, int]:
+    """Delete cached response files beyond the configured retention.
+
+    Removes files older than RESPONSE_CACHE_MAX_AGE_HOURS, then the oldest remaining
+    files until the directory is within RESPONSE_CACHE_MAX_MB. The file named by
+    `keep` (the response just written) is never removed. Runs at startup and after
+    each write so the cache directory cannot grow without bound.
+    """
+    removed = {"expired": 0, "over_quota": 0}
+    try:
+        entries = [(stat.st_mtime, stat.st_size, entry.path)
+                   for entry, stat in response_cache_entries()]
+    except OSError:
+        return removed
+
+    def remove(path: str, reason: str) -> bool:
+        if keep is not None and os.path.abspath(path) == os.path.abspath(keep):
+            return False
+        try:
+            os.remove(path)
+        except OSError:
+            return False
+        removed[reason] += 1
+        return True
+
+    entries.sort()  # oldest first
+    remaining = []
+    cutoff = time.time() - RESPONSE_CACHE_MAX_AGE_HOURS * 3600
+    for mtime, size, path in entries:
+        if RESPONSE_CACHE_MAX_AGE_HOURS > 0 and mtime < cutoff and remove(path, "expired"):
+            continue
+        remaining.append((mtime, size, path))
+
+    if RESPONSE_CACHE_MAX_MB > 0:
+        max_bytes = RESPONSE_CACHE_MAX_MB * 1024 * 1024
+        total = sum(size for _, size, _ in remaining)
+        for mtime, size, path in remaining:
+            if total <= max_bytes:
+                break
+            if remove(path, "over_quota"):
+                total -= size
+
+    return removed
+
+if ENABLE_FILE_CACHING:
+    prune_response_cache()
 
 def _validate_cache_filepath(filepath: str) -> str:
     """Resolve filepath and confirm it is inside RESPONSE_CACHE_DIR.
@@ -159,7 +310,10 @@ def _validate_cache_filepath(filepath: str) -> str:
     Raises ValueError if the path escapes the cache directory.
     """
     cache_root = Path(RESPONSE_CACHE_DIR).resolve()
-    resolved = Path(filepath).resolve()
+    path = Path(filepath)
+    if _CACHE_FILENAME.fullmatch(filepath):
+        path = cache_root / filepath
+    resolved = path.resolve()
     if not str(resolved).startswith(str(cache_root) + os.sep) and resolved != cache_root:
         raise ValueError(
             f"filepath must be inside the cache directory ({cache_root})"
@@ -178,30 +332,101 @@ def load_response_from_file(filepath: str) -> Any:
     except Exception as e:
         return None
 
-def create_truncated_response(data: Any, filepath: str, section: str, method: str, params: Dict) -> Dict:
-    """Create a truncated response with metadata about the full cached result"""
-    item_count = len(data) if isinstance(data, list) else 1
-    preview_items = data[:3] if isinstance(data, list) and len(data) > 3 else data
+def _truncate_value(value: Any, budget_chars: int) -> Any:
+    """Return value unchanged if it serializes within budget_chars, else a short stand-in."""
+    if len(json.dumps(value)) <= budget_chars:
+        return value
+    if isinstance(value, list):
+        return f"<list of {len(value)} items - see cached file>"
+    if isinstance(value, dict):
+        return f"<object with {len(value)} keys - see cached file>"
+    text = value if isinstance(value, str) else str(value)
+    suffix = "... <truncated>"
+    lo, hi = 0, min(len(text), budget_chars)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(to_json(text[:mid] + suffix)) <= budget_chars:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + suffix
 
-    return {
-        "_response_truncated": True,
-        "_reason": f"Response too large (~{estimate_token_count(json.dumps(data))} tokens)",
-        "_full_response_cached": filepath,
-        "_total_items": item_count,
-        "_showing": "preview" if isinstance(data, list) else "summary",
-        "_preview": preview_items,
-        "_hints": {
-            "reduce_page_size": f"Reduce request: Use perPage parameter with value <= {MAX_PER_PAGE}",
-            "access_via_mcp_paginated": f"get_cached_response(filepath='{filepath}', offset=0, limit=10) - Returns 10 items at a time",
-            "access_via_cli_full": f"cat {filepath} | jq '.data' - View all data",
-            "search_via_cli": f"cat {filepath} | jq '.data[] | select(.field == \"value\")' - Search/filter",
-            "count_via_cli": f"cat {filepath} | jq '.data | length' - Count items",
-            "recommendation": "For large datasets, command-line tools (jq, grep) are recommended over MCP tools"
-        },
-        "section": section,
-        "method": method,
-        "parameters": params
-    }
+def build_preview(data: Any, budget_chars: Optional[int] = None) -> Any:
+    """Build a preview of data that serializes to roughly budget_chars at most.
+
+    Lists keep up to PREVIEW_MAX_ITEMS leading items, dicts keep their leading keys;
+    in both cases oversized values are replaced by a short stand-in so the preview
+    stays bounded regardless of the shape of the response.
+    """
+    budget = PREVIEW_BUDGET_CHARS if budget_chars is None else budget_chars
+
+    if isinstance(data, list):
+        items = data[:PREVIEW_MAX_ITEMS]
+        per_item = budget // max(len(items), 1)
+        return [
+            build_preview(item, per_item) if isinstance(item, dict) else _truncate_value(item, per_item)
+            for item in items
+        ]
+
+    if isinstance(data, dict):
+        if len(json.dumps(data)) <= budget:
+            return data
+        preview = {}
+        remaining = max(budget - 40, 0)  # reserve room for the braces and "_omitted_keys"
+        per_value = max(budget // PREVIEW_MAX_ITEMS, 1)
+        for index, (key, value) in enumerate(data.items()):
+            entry = _truncate_value(value, min(per_value, remaining))
+            cost = len(json.dumps(key)) + len(json.dumps(entry)) + 2
+            if cost > remaining:
+                preview["_omitted_keys"] = len(data) - index
+                break
+            preview[key] = entry
+            remaining -= cost
+        return preview
+
+    return _truncate_value(data, budget)
+
+def create_truncated_response(data: Any, filepath: str, section: str, method: str,
+                              params: Dict, estimated_tokens: int, pagination_limited: bool) -> Dict:
+    """Fit the retrieval path, preview and optional metadata in the serialized budget."""
+    response = {"_response_truncated": True}
+
+    def include(key: str, value: Any) -> bool:
+        response[key] = value
+        if len(to_json(response)) <= MAX_RESPONSE_CHARS:
+            return True
+        del response[key]
+        return False
+
+    if not include("_full_response_cached", filepath):
+        if not include("_full_response_cached", Path(filepath).name):
+            return response
+
+    if pagination_limited:
+        include("_pagination_limited", True)
+    # Account for the property name, quotes and delimiters before building the preview.
+    room = MAX_RESPONSE_CHARS - len(to_json({**response, "_preview": None})) + len("null")
+    if room > 0:
+        include("_preview", build_preview(data, min(room, PREVIEW_BUDGET_CHARS)))
+    include("_total_items", len(data) if isinstance(data, list) else 1)
+    if isinstance(data, dict):
+        include("_keys", _truncate_value(list(data), PREVIEW_BUDGET_CHARS // 4))
+    include("section", section)
+    include("method", method)
+    include("_reason", f"Response too large (~{estimated_tokens} tokens)")
+    include("_showing", "preview" if isinstance(data, list) else "summary")
+    if pagination_limited:
+        include("_pagination_message", f"Request modified: pagination limited to {MAX_PER_PAGE} items per page")
+    include("parameters", params)
+    include("_hints", {
+        "reduce_page_size": f"Reduce request: Use perPage parameter with value <= {MAX_PER_PAGE}",
+        "access_via_mcp_paginated": f"get_cached_response(filepath='{filepath}', offset=0, limit=10) - Returns 10 items at a time",
+        "access_via_cli_full": f"cat {filepath} | jq '.data' - View all data",
+        "search_via_cli": f"cat {filepath} | jq '.data[] | select(.field == \"value\")' - Search/filter",
+        "count_via_cli": f"cat {filepath} | jq '.data | length' - Count items",
+        "recommendation": "For large datasets, command-line tools (jq, grep) are recommended over MCP tools"
+    })
+    return response
 
 def enforce_pagination_limits(params: Dict, method: str) -> Dict:
     """Enforce pagination limits on API parameters"""
@@ -232,26 +457,6 @@ def to_async(func):
 # DYNAMIC TOOL GENERATION
 ###################
 
-# SDK sections to expose
-SDK_SECTIONS = [
-    'organizations',
-    'networks',
-    'devices',
-    'wireless',
-    'switch',
-    'appliance',
-    'camera',
-    'cellularGateway',
-    'campusGateway',
-    'sensor',
-    'sm',
-    'insight',
-    'licensing',
-    'administered',
-    'spaces',
-    'wirelessController',
-]
-
 def create_cache_key(section: str, method: str, kwargs: Dict) -> str:
     """Create a cache key from method call.
     Format: '<section>::<md5hash>' so invalidate(section) clears all related entries.
@@ -261,14 +466,45 @@ def create_cache_key(section: str, method: str, kwargs: Dict) -> str:
     return f"{section}::{key_hash}"
 
 ###################
-# GENERIC API CALLER - Provides access to ALL 804+ endpoints
+# GENERIC API CALLER - Provides access to every method in the exposed SDK sections
 ###################
+
+def _resolve_sdk_method(section: str, method: str):
+    """Look up a public SDK method in an exposed section.
+
+    Returns (callable, None) on success or (None, error_dict). Only sections listed in
+    SDK_SECTIONS and public methods are reachable, so internals of the dashboard client
+    (e.g. its raw HTTP session) cannot be invoked and bypass the write guards.
+    """
+    if not isinstance(section, str) or section not in SDK_SECTIONS or not hasattr(dashboard, section):
+        return None, {
+            "error": f"Invalid section '{section}'",
+            "available_sections": [s for s in SDK_SECTIONS if hasattr(dashboard, s)]
+        }
+
+    section_obj = getattr(dashboard, section)
+
+    if not isinstance(method, str) or method.startswith('_') or not hasattr(section_obj, method):
+        return None, {
+            "error": f"Method '{method}' not found in section '{section}'",
+            "hint": "Use search_methods(keyword='...') or list_all_methods(section='...') to find valid methods"
+        }
+
+    method_func = getattr(section_obj, method)
+
+    if not callable(method_func):
+        return None, {"error": f"'{method}' is not callable"}
+
+    return method_func, None
 
 def _missing_required_params(section: str, method: str, params: dict) -> list:
     """Return the SDK method's required parameter names that are absent from params."""
     try:
-        sig = inspect.signature(getattr(getattr(dashboard, section), method))
-    except (AttributeError, TypeError, ValueError):
+        method_func, lookup_error = _resolve_sdk_method(section, method)
+        if lookup_error:
+            return []
+        sig = inspect.signature(method_func)
+    except (TypeError, ValueError):
         return []
     return [
         name for name, p in sig.parameters.items()
@@ -290,25 +526,10 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
     original_params = params.copy()
 
     try:
-        # Validate section
-        if not hasattr(dashboard, section):
-            return json.dumps({
-                "error": f"Invalid section '{section}'",
-                "available_sections": SDK_SECTIONS
-            }, indent=2)
-
-        section_obj = getattr(dashboard, section)
-
-        # Validate method
-        if not hasattr(section_obj, method):
-            return json.dumps({
-                "error": f"Method '{method}' not found in section '{section}'"
-            }, indent=2)
-
-        method_func = getattr(section_obj, method)
-
-        if not callable(method_func):
-            return json.dumps({"error": f"'{method}' is not callable"}, indent=2)
+        # Validate section and method (exposed sections and public methods only)
+        method_func, lookup_error = _resolve_sdk_method(section, method)
+        if lookup_error:
+            return to_json(lookup_error)
 
         # Determine operation type
         is_read = is_read_only_operation(method)
@@ -336,9 +557,12 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
             cache_key = create_cache_key(section, method, params)
             cached = cache.get(cache_key)
             if cached is not None:
+                # Annotate a copy so the stored entry is never modified
                 if isinstance(cached, dict):
-                    cached['_from_cache'] = True
-                return json.dumps(cached, indent=2)
+                    annotated = to_json({**cached, '_from_cache': True})
+                    if len(annotated) <= MAX_RESPONSE_CHARS:
+                        return annotated
+                return to_json(cached)
 
         # Call the method
         result = method_func(**params)
@@ -348,47 +572,52 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
             cache.invalidate(section)
 
         # Check response size and handle large responses
-        result_json = json.dumps(result)
+        # Measure the same compact serialization that is returned to the client
+        response_data = result
+        if pagination_limited and isinstance(result, dict):
+            response_data = {
+                **result,
+                "_pagination_limited": True,
+                "_pagination_message": f"Request modified: pagination limited to {MAX_PER_PAGE} items per page",
+            }
+        result_json = to_json(response_data)
         estimated_tokens = estimate_token_count(result_json)
 
+        filepath = None
         if ENABLE_FILE_CACHING and estimated_tokens > MAX_RESPONSE_TOKENS:
-            # Save full response to file
-            filepath = save_response_to_file(result, section, method, original_params)
+            # Save full response to file; if that fails, fall through and return it in full
+            # rather than losing the data the API already returned
+            try:
+                filepath = save_response_to_file(result, section, method, original_params)
+            except OSError as e:
+                print(f"WARNING: could not save large response to the cache directory: {e}", file=sys.stderr)
 
+        if filepath:
             # Create truncated response with metadata
-            truncated_response = create_truncated_response(result, filepath, section, method, original_params)
-
-            # Add pagination warning if limits were enforced
-            if pagination_limited:
-                truncated_response["_pagination_limited"] = True
-                truncated_response["_pagination_message"] = f"Request modified: pagination limited to {MAX_PER_PAGE} items per page"
+            truncated_response = create_truncated_response(
+                result, filepath, section, method, original_params, estimated_tokens, pagination_limited
+            )
 
             # Cache the truncated response (not the full result)
             if ENABLE_CACHING and is_read:
                 cache_key = create_cache_key(section, method, params)
-                cache.set(cache_key, truncated_response)
+                cache.set(cache_key, truncated_response, backing_file=filepath)
 
-            return json.dumps(truncated_response, indent=2)
-
-        # Normal response (small enough)
-        response_data = result
-        if pagination_limited and isinstance(response_data, dict):
-            response_data["_pagination_limited"] = True
-            response_data["_pagination_message"] = f"Request modified: pagination limited to {MAX_PER_PAGE} items per page"
+            return to_json(truncated_response)
 
         # Cache read results
         if ENABLE_CACHING and is_read:
             cache_key = create_cache_key(section, method, params)
             cache.set(cache_key, response_data)
 
-        return json.dumps(response_data, indent=2)
+        return result_json
 
     except meraki.exceptions.APIError as e:
-        return json.dumps({
+        return to_json({
             "error": "Meraki API Error",
             "message": str(e),
             "status": getattr(e, 'status', 'unknown')
-        }, indent=2)
+        })
     except TypeError as e:
         response = {
             "error": "Invalid parameters",
@@ -405,12 +634,12 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
                 "'section' and 'method' are ignored. Example: "
                 f"call_meraki_api(section='{section}', method='{method}', parameters={json.dumps(example)})"
             )
-        return json.dumps(response, indent=2)
+        return to_json(response)
     except Exception as e:
-        return json.dumps({
+        return to_json({
             "error": str(e),
             "type": type(e).__name__
-        }, indent=2)
+        })
 
 async def call_meraki_method(section: str, method: str, **params) -> str:
     """Internal async wrapper for pre-registered tools"""
@@ -430,7 +659,10 @@ async def call_meraki_api(
     )
 ) -> str:
     """
-    Call any Meraki API method - provides access to all 804+ endpoints
+    Call any Meraki API method - provides access to the full Meraki Dashboard API
+
+    Use search_methods(keyword=...) to find a method and get_method_info(section, method)
+    for its parameters before calling it.
 
     Args:
         section: SDK section (organizations, networks, wireless, switch, appliance, camera, devices, sensor, sm, etc.)
@@ -542,7 +774,6 @@ async def updateDeviceSwitchPort(
     }
     return await call_meraki_method("switch", "updateDeviceSwitchPort", **params)
 
-print("Registered hybrid MCP: 12 common tools + call_meraki_api for full API access (804+ methods)", file=sys.stderr)
 
 ###################
 # METHOD INDEX (built once at startup - SDK structure is static)
@@ -564,56 +795,106 @@ def _build_method_index() -> Dict:
     return index
 
 _METHOD_INDEX = _build_method_index()
+TOTAL_METHODS = sum(len(methods) for methods in _METHOD_INDEX.values())
+
+print(
+    f"Registered hybrid MCP: 12 common tools + call_meraki_api for full API access ({TOTAL_METHODS} methods)",
+    file=sys.stderr,
+)
 
 ###################
 # DISCOVERY TOOLS
 ###################
 
+SEARCH_DEFAULT_LIMIT = 50
+SEARCH_MAX_LIMIT = 200
+
 @mcp.tool()
 async def list_all_methods(section: Optional[str] = None) -> str:
     """
-    List all available Meraki API methods
+    List Meraki API methods. Prefer search_methods(keyword=...) to find a method.
+
+    Without a section this returns only the section names and how many methods each
+    has (the full list is roughly 10,000 tokens). Pass a section to list its methods.
 
     Args:
-        section: Optional section filter (organizations, networks, wireless, switch, appliance, etc.)
+        section: Section to list (organizations, networks, wireless, switch, appliance, etc.)
     """
     if section:
         if section not in _METHOD_INDEX:
-            return json.dumps({
+            return to_json({
                 "error": f"Section '{section}' not found",
                 "available_sections": list(_METHOD_INDEX.keys())
-            }, indent=2)
-        sections_to_show = {section: _METHOD_INDEX[section]}
-    else:
-        sections_to_show = _METHOD_INDEX
+            })
+        methods = _METHOD_INDEX[section]
+        return to_json({
+            "section": section,
+            "methods": methods,
+            "total_methods": len(methods),
+            "usage": "Use call_meraki_api(section='...', method='...', parameters={...}) to call any method"
+        })
 
-    return json.dumps({
-        "sections": sections_to_show,
-        "total_methods": sum(len(v) for v in sections_to_show.values()),
-        "usage": "Use call_meraki_api(section='...', method='...', parameters={...}) to call any method"
-    }, indent=2)
+    return to_json({
+        "sections": {name: len(methods) for name, methods in _METHOD_INDEX.items()},
+        "total_methods": sum(len(v) for v in _METHOD_INDEX.values()),
+        "usage": (
+            "Counts of methods per section. Use search_methods(keyword='...') to find a method, "
+            "or list_all_methods(section='...') to list one section"
+        )
+    })
 
 @mcp.tool()
-async def search_methods(keyword: str) -> str:
+async def search_methods(keyword: str, section: Optional[str] = None, limit: int = SEARCH_DEFAULT_LIMIT) -> str:
     """
     Search for Meraki API methods by keyword
 
     Args:
-        keyword: Search term (e.g., 'admin', 'firewall', 'ssid', 'event')
+        keyword: One or more search terms; a method must contain all of them
+            (e.g., 'firewall', 'ssid', 'wireless ssid', 'update switch port')
+        section: Optional section to search within (e.g., 'wireless', 'appliance')
+        limit: Maximum number of matches to return (default: 50, max: 200)
     """
-    keyword_lower = keyword.lower()
-    results = {
-        section: [m for m in methods if keyword_lower in m.lower()]
-        for section, methods in _METHOD_INDEX.items()
-    }
-    results = {k: v for k, v in results.items() if v}
+    if section and section not in _METHOD_INDEX:
+        return to_json({
+            "error": f"Section '{section}' not found",
+            "available_sections": list(_METHOD_INDEX.keys())
+        })
 
-    return json.dumps({
+    terms = keyword.lower().split()
+    if not terms:
+        return to_json({
+            "error": "keyword must not be empty",
+            "hint": "Use list_all_methods() to see the available sections"
+        })
+
+    limit = max(1, min(limit if isinstance(limit, int) else SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT))
+    sections = {section: _METHOD_INDEX[section]} if section else _METHOD_INDEX
+
+    results = {}
+    total_matches = 0
+    returned = 0
+    for section_name, methods in sections.items():
+        matches = [m for m in methods if all(term in m.lower() for term in terms)]
+        total_matches += len(matches)
+        shown = matches[:limit - returned]
+        if shown:
+            results[section_name] = shown
+            returned += len(shown)
+
+    response = {
         "keyword": keyword,
         "results": results,
-        "total_matches": sum(len(v) for v in results.values()),
+        "total_matches": total_matches,
         "usage": "Use call_meraki_api(section='...', method='...', parameters={...})"
-    }, indent=2)
+    }
+    if total_matches > returned:
+        response["_truncated"] = True
+        response["_returned"] = returned
+        response["_hint"] = (
+            f"Showing {returned} of {total_matches} matches. Add more terms to the keyword, "
+            "pass section='...', or raise limit"
+        )
+    return to_json(response)
 
 @mcp.tool()
 async def get_method_info(section: str, method: str) -> str:
@@ -625,20 +906,10 @@ async def get_method_info(section: str, method: str) -> str:
         method: Method name (e.g., 'getOrganizationAdmins')
     """
     try:
-        if not hasattr(dashboard, section):
-            return json.dumps({
-                "error": f"Section '{section}' not found",
-                "available_sections": SDK_SECTIONS
-            }, indent=2)
+        method_func, lookup_error = _resolve_sdk_method(section, method)
+        if lookup_error:
+            return to_json(lookup_error)
 
-        section_obj = getattr(dashboard, section)
-
-        if not hasattr(section_obj, method):
-            return json.dumps({
-                "error": f"Method '{method}' not found in '{section}'"
-            }, indent=2)
-
-        method_func = getattr(section_obj, method)
         sig = inspect.signature(method_func)
 
         params = {}
@@ -650,47 +921,47 @@ async def get_method_info(section: str, method: str) -> str:
                 "default": None if param.default == inspect.Parameter.empty else str(param.default)
             }
 
-        return json.dumps({
+        return to_json({
             "section": section,
             "method": method,
             "parameters": params,
             "docstring": inspect.getdoc(method_func),
             "usage_example": f'call_meraki_api(section="{section}", method="{method}", parameters={{...}})'
-        }, indent=2)
+        })
 
     except Exception as e:
-        return json.dumps({
+        return to_json({
             "error": str(e)
-        }, indent=2)
+        })
 
 @mcp.tool()
 async def cache_stats() -> str:
     """Get cache statistics and configuration"""
     stats = cache.stats()
     stats['read_only_mode'] = READ_ONLY_MODE
-    return json.dumps(stats, indent=2)
+    return to_json(stats)
 
 @mcp.tool()
 async def cache_clear() -> str:
     """Clear all cached data"""
     cache.clear()
-    return json.dumps({
+    return to_json({
         "status": "success",
         "message": "Cache cleared successfully"
-    }, indent=2)
+    })
 
 @mcp.tool()
 async def get_mcp_config() -> str:
     """Get MCP configuration"""
-    return json.dumps({
+    return to_json({
         "mode": "hybrid",
         "description": "12 pre-registered tools + call_meraki_api for full API access",
         "pre_registered_tools": ["getOrganizations", "getOrganizationAdmins", "getOrganizationNetworks",
                                   "getOrganizationDevices", "getNetwork", "getNetworkClients",
                                   "getNetworkEvents", "getNetworkDevices", "getDevice",
                                   "getNetworkWirelessSsids", "getDeviceSwitchPorts", "updateDeviceSwitchPort"],
-        "generic_caller": "call_meraki_api - access all 804+ methods",
-        "total_available_methods": "804+",
+        "generic_caller": "call_meraki_api - access every method in the exposed SDK sections",
+        "total_available_methods": TOTAL_METHODS,
         "read_only_mode": READ_ONLY_MODE,
         "meraki_base_url": MERAKI_BASE_URL,
         "meraki_caller": MERAKI_CALLER,
@@ -699,10 +970,13 @@ async def get_mcp_config() -> str:
         "file_caching_enabled": ENABLE_FILE_CACHING,
         "max_response_tokens": MAX_RESPONSE_TOKENS,
         "max_per_page": MAX_PER_PAGE,
+        "cache_max_items": CACHE_MAX_ITEMS,
         "response_cache_dir": RESPONSE_CACHE_DIR,
+        "response_cache_max_age_hours": RESPONSE_CACHE_MAX_AGE_HOURS,
+        "response_cache_max_mb": RESPONSE_CACHE_MAX_MB,
         "organization_id_configured": bool(MERAKI_ORG_ID),
         "api_key_configured": bool(MERAKI_API_KEY)
-    }, indent=2)
+    })
 
 @mcp.tool()
 async def get_cached_response(filepath: str, offset: int = 0, limit: int = 10) -> str:
@@ -731,24 +1005,24 @@ async def get_cached_response(filepath: str, offset: int = 0, limit: int = 10) -
         try:
             _validate_cache_filepath(filepath)
         except ValueError as e:
-            return json.dumps({
+            return to_json({
                 "error": "Invalid filepath",
                 "message": str(e)
-            }, indent=2)
+            })
 
         data = load_response_from_file(filepath)
         if data is None:
-            return json.dumps({
+            return to_json({
                 "error": "Could not load cached response",
                 "filepath": filepath
-            }, indent=2)
+            })
 
         # Handle list pagination
         if isinstance(data, list):
             total_items = len(data)
             paginated_data = data[offset:offset + limit]
 
-            return json.dumps({
+            return to_json({
                 "_paginated": True,
                 "_total_items": total_items,
                 "_offset": offset,
@@ -763,14 +1037,14 @@ async def get_cached_response(filepath: str, offset: int = 0, limit: int = 10) -
                     "count_cli": f"cat {filepath} | jq '.data | length'"
                 },
                 "data": paginated_data
-            }, indent=2)
+            })
         else:
             # Non-list data - check size and potentially truncate
             data_json = json.dumps(data)
             estimated_tokens = estimate_token_count(data_json)
 
             if estimated_tokens > MAX_RESPONSE_TOKENS:
-                return json.dumps({
+                return to_json({
                     "_warning": "Response too large for MCP context",
                     "_estimated_tokens": estimated_tokens,
                     "_max_allowed_tokens": MAX_RESPONSE_TOKENS,
@@ -782,51 +1056,48 @@ async def get_cached_response(filepath: str, offset: int = 0, limit: int = 10) -
                         "search": f"grep 'search-term' {filepath}"
                     },
                     "_preview": str(data)[:500] + "..." if len(str(data)) > 500 else data
-                }, indent=2)
+                })
 
-            return json.dumps(data, indent=2)
+            return to_json(data)
 
     except Exception as e:
-        return json.dumps({
+        return to_json({
             "error": str(e),
             "filepath": filepath
-        }, indent=2)
+        })
 
 @mcp.tool()
 async def list_cached_responses() -> str:
     """List all cached response files"""
     try:
         if not os.path.exists(RESPONSE_CACHE_DIR):
-            return json.dumps({
+            return to_json({
                 "message": "No cache directory found",
                 "cache_dir": RESPONSE_CACHE_DIR
-            }, indent=2)
+            })
 
         files = []
-        for filename in os.listdir(RESPONSE_CACHE_DIR):
-            if filename.endswith('.json'):
-                filepath = os.path.join(RESPONSE_CACHE_DIR, filename)
-                stat = os.stat(filepath)
-                files.append({
-                    "filename": filename,
-                    "filepath": filepath,
-                    "size_bytes": stat.st_size,
-                    "size_kb": round(stat.st_size / 1024, 2),
-                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                })
+        for entry, stat in response_cache_entries():
+            files.append({
+                "filename": entry.name,
+                "filepath": entry.path,
+                "size_bytes": stat.st_size,
+                "size_kb": round(stat.st_size / 1024, 2),
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
 
         files.sort(key=lambda x: x['modified'], reverse=True)
 
-        return json.dumps({
+        return to_json({
             "cache_dir": RESPONSE_CACHE_DIR,
             "total_files": len(files),
             "files": files,
             "hint": "Use get_cached_response(filepath='...') to retrieve full data"
-        }, indent=2)
+        })
     except Exception as e:
-        return json.dumps({
+        return to_json({
             "error": str(e)
-        }, indent=2)
+        })
 
 @mcp.tool()
 async def clear_cached_files(older_than_hours: int = 24) -> str:
@@ -838,51 +1109,49 @@ async def clear_cached_files(older_than_hours: int = 24) -> str:
     """
     try:
         if not os.path.exists(RESPONSE_CACHE_DIR):
-            return json.dumps({
+            return to_json({
                 "message": "No cache directory found",
                 "cache_dir": RESPONSE_CACHE_DIR
-            }, indent=2)
+            })
 
         now = datetime.now()
         deleted = []
         kept = []
 
-        for filename in os.listdir(RESPONSE_CACHE_DIR):
-            if filename.endswith('.json'):
-                filepath = os.path.join(RESPONSE_CACHE_DIR, filename)
-                file_time = datetime.fromtimestamp(os.path.getmtime(filepath))
-                age_hours = (now - file_time).total_seconds() / 3600
+        for entry, stat in response_cache_entries():
+            age_hours = (now - datetime.fromtimestamp(stat.st_mtime)).total_seconds() / 3600
+            item = {"filename": entry.name, "age_hours": round(age_hours, 2)}
+            if age_hours > older_than_hours:
+                try:
+                    os.remove(entry.path)
+                except FileNotFoundError:
+                    continue
+                deleted.append(item)
+            else:
+                kept.append(item)
 
-                if age_hours > older_than_hours:
-                    os.remove(filepath)
-                    deleted.append({
-                        "filename": filename,
-                        "age_hours": round(age_hours, 2)
-                    })
-                else:
-                    kept.append({
-                        "filename": filename,
-                        "age_hours": round(age_hours, 2)
-                    })
-
-        return json.dumps({
+        return to_json({
             "cache_dir": RESPONSE_CACHE_DIR,
             "deleted_count": len(deleted),
             "kept_count": len(kept),
             "deleted_files": deleted,
             "kept_files": kept
-        }, indent=2)
+        })
     except Exception as e:
-        return json.dumps({
+        return to_json({
             "error": str(e)
-        }, indent=2)
+        })
 
-# Module-level ASGI app for external uvicorn invocation
-app = mcp.streamable_http_app() if MCP_TRANSPORT in ("http", "streamable-http") else None
+# Module-level ASGI app for HTTP transports, also usable with an external uvicorn.
+# It requires "Authorization: Bearer <MCP_AUTH_TOKEN>" when MCP_AUTH_TOKEN is set.
+app = mcp.http_app(MCP_TRANSPORT) if MCP_TRANSPORT in HTTP_TRANSPORTS else None
 
 if __name__ == "__main__":
-    transport = "streamable-http" if MCP_TRANSPORT == "http" else MCP_TRANSPORT
+    transport = normalize_transport(MCP_TRANSPORT)
     print(f"Starting Meraki Magic MCP - Full API ({transport} transport)", file=sys.stderr)
-    if transport in ("streamable-http", "sse"):
-        print(f"Listening on {MCP_HOST}:{MCP_PORT}", file=sys.stderr)
-    mcp.run(transport=transport)
+    if app is not None:
+        auth = "bearer token required" if get_auth_token() else "no authentication"
+        print(f"Listening on {MCP_HOST}:{MCP_PORT} ({auth})", file=sys.stderr)
+        serve_http(app, MCP_HOST, MCP_PORT)
+    else:
+        mcp.run(transport=transport)

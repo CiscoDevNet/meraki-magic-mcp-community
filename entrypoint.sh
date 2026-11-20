@@ -7,7 +7,7 @@ if [ "${MCP_SERVER}" = "manual" ]; then
     echo "Starting Meraki Magic MCP (Manual - curated tools)" >&2
 else
     SERVER_FILE="/app/meraki-mcp-dynamic.py"
-    echo "Starting Meraki Magic MCP (Dynamic - 804+ endpoints)" >&2
+    echo "Starting Meraki Magic MCP (Dynamic - full API)" >&2
 fi
 
 echo "Transport: ${MCP_TRANSPORT:-stdio}" >&2

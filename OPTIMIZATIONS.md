@@ -28,6 +28,7 @@ The dynamic MCP (`meraki-mcp-dynamic.py`) now includes several performance and s
 # In MCP client env or process environment
 ENABLE_CACHING=true          # Enable/disable caching
 CACHE_TTL_SECONDS=300        # 5 minutes (adjust as needed)
+CACHE_MAX_ITEMS=500          # Max in-memory entries; oldest are evicted first (0 = unlimited)
 ```
 
 ### Example:
@@ -61,9 +62,10 @@ cache_clear
 **Solution:** Read-only mode is enabled by default and blocks all write operations.
 
 ### How It Works:
-- Detects write operations (create, update, delete, remove, reboot, etc.)
+- Treats every SDK method that is not a `get*`/`list*` read as a write (create, update, delete, reboot, wipe, bulk, etc.)
 - If `READ_ONLY_MODE=true`, blocks write operations with clear error
-- If `READ_ONLY_MODE=false`, destructive `delete*` and `remove*` operations still require `confirm_destructive_action=true`
+- If `READ_ONLY_MODE=false`, destructive operations (`delete*`, `remove*`, `release*`, `wipe*`, `unenroll*`, `uninstall*`, `revoke*`, `detach*`, and bulk `*Delete` methods) still require `confirm_destructive_action=true`
+- `call_meraki_api` only reaches public methods of the listed SDK sections; client internals are not callable
 - Read operations work normally
 - Can be toggled anytime via the MCP client `env` or process environment
 
@@ -181,7 +183,13 @@ ENABLE_FILE_CACHING=true         # Enable file caching (default: true)
 MAX_RESPONSE_TOKENS=5000         # Max tokens before truncation (default: 5000)
 MAX_PER_PAGE=100                 # Max items per page (default: 100)
 RESPONSE_CACHE_DIR=.meraki_cache # Cache directory (default: .meraki_cache)
+RESPONSE_CACHE_MAX_AGE_HOURS=24  # Delete cached files older than this (default: 24, 0 = keep)
+RESPONSE_CACHE_MAX_MB=100        # Cap on total size of cached files (default: 100, 0 = no cap)
 ```
+
+Cleanup recognizes current and older response files by their filename and matching metadata. At startup and after each save, files older than `RESPONSE_CACHE_MAX_AGE_HOURS` are deleted, then the oldest files until the directory is within `RESPONSE_CACHE_MAX_MB`. Files are created with owner-only permissions because responses can contain sensitive configuration such as pre-shared keys.
+
+Tool responses are returned as compact JSON (no indentation), which uses roughly 40% fewer tokens than pretty-printed output on typical list responses. `MAX_RESPONSE_TOKENS` is measured against that same compact text. The minimum budget is 7 estimated tokens. Small budgets omit optional fields and may return a filename that `get_cached_response` accepts directly. If only the truncation marker fits, use `list_cached_responses` to find the file. Disk eviction also expires the corresponding in-memory preview on its next read. Cached files on disk remain indented for reading with `jq` or an editor.
 
 ### Example - Large Response:
 ```
@@ -381,11 +389,13 @@ Response:
   "file_caching_enabled": true,
   "max_response_tokens": 5000,
   "max_per_page": 100,
-  "response_cache_dir": ".meraki_cache",
+  "cache_max_items": 500,
+  "response_cache_dir": "/path/to/meraki-magic-mcp-community/.meraki_cache",
+  "response_cache_max_age_hours": 24.0,
+  "response_cache_max_mb": 100.0,
   "organization_id_configured": true,
   "api_key_configured": true,
-  "total_tools": 804,
-  "sdk_sections": ["organizations", "networks", ...]
+  "total_available_methods": 1039
 }
 ```
 

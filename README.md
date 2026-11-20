@@ -5,13 +5,13 @@ Meraki Magic is a Python-based MCP (Model Context Protocol) server for Cisco's M
 ## Two Versions Available
 
 **🚀 Dynamic MCP (Recommended)** - `meraki-mcp-dynamic.py`
-- **~804 API endpoints** automatically exposed
+- **1,000+ API methods** reachable through one generic tool (1,039 with Meraki SDK 4.7)
 - **100% SDK coverage** - all Meraki API methods available
 - **Auto-updates** when you upgrade the Meraki SDK
 - **No manual coding** required for new endpoints
 
 **📋 Manual MCP** - `meraki-mcp.py`
-- **40 curated endpoints** with detailed schemas
+- **83 curated tools** with detailed schemas
 - **Type-safe** with Pydantic validation
 - **Custom business logic** for specific use cases
 - **Clean documentation** for common operations
@@ -96,11 +96,11 @@ export MERAKI_PYTHON_SDK_CALLER="MagicMCP CiscoDevNet"
 export READ_ONLY_MODE=true
 ```
 
-Optional tuning: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`.
+Optional tuning: `ENABLE_CACHING`, `CACHE_TTL_SECONDS`, `CACHE_MAX_ITEMS`, `ENABLE_FILE_CACHING`, `MAX_RESPONSE_TOKENS`, `MAX_PER_PAGE`, `RESPONSE_CACHE_DIR`, `RESPONSE_CACHE_MAX_AGE_HOURS`, `RESPONSE_CACHE_MAX_MB`.
 
 Get your API key from: **Meraki Dashboard → Organization → Settings → Dashboard API access**
 
-`READ_ONLY_MODE` defaults to `true` to block create/update/delete/remove operations. Set `READ_ONLY_MODE=false` only when you intend to make changes. Delete/remove calls also require `confirm_destructive_action=true`.
+`READ_ONLY_MODE` defaults to `true` to block every operation that is not a `get*`/`list*` read. Set `READ_ONLY_MODE=false` only when you intend to make changes. Destructive calls (delete, remove, release, wipe, unenroll, uninstall, revoke, detach) also require `confirm_destructive_action=true`.
 
 Use `MERAKI_BASE_URL` to point the MCP server at another Meraki region or compatible Dashboard API base URI.
 
@@ -221,12 +221,15 @@ Run the MCP server over HTTP for remote access or shared team use:
 export MERAKI_API_KEY="your_api_key_here"
 export MERAKI_ORG_ID="your_org_id_here"
 export MCP_TRANSPORT=http
-export MCP_HOST=127.0.0.1  # Use 0.0.0.0 for remote access
+export MCP_HOST=127.0.0.1  # Use 0.0.0.0 for remote access, together with MCP_AUTH_TOKEN
 export MCP_PORT=8000
+export MCP_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 python meraki-mcp-dynamic.py
 # Server available at http://127.0.0.1:8000/mcp
 ```
+
+With `MCP_AUTH_TOKEN` set, every request must send `Authorization: Bearer <token>`. HTTP mode exposes every tool with your Meraki API key, so always set a token when other machines can reach the port, and use a TLS reverse proxy across a network.
 
 Connect Claude Desktop to an HTTP server using [mcp-remote](https://www.npmjs.com/package/mcp-remote) (requires Node.js):
 
@@ -235,7 +238,13 @@ Connect Claude Desktop to an HTTP server using [mcp-remote](https://www.npmjs.co
   "mcpServers": {
     "Meraki_Magic_MCP": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://127.0.0.1:8000/mcp"]
+      "args": [
+        "-y", "mcp-remote", "http://127.0.0.1:8000/mcp",
+        "--header", "Authorization:${AUTH_HEADER}"
+      ],
+      "env": {
+        "AUTH_HEADER": "Bearer your_token_here"
+      }
     }
   }
 }
@@ -249,8 +258,10 @@ The fastest way to deploy remotely:
 export MERAKI_API_KEY="your_api_key_here"
 export MERAKI_ORG_ID="your_org_id_here"
 docker compose up -d
-# Server available at http://localhost:8000/mcp
+# Server available at http://localhost:8000/mcp (published on the host's loopback interface only)
 ```
+
+The container runs as an unprivileged user. To accept connections from other machines, set `MCP_PUBLISH_HOST=0.0.0.0` and `MCP_AUTH_TOKEN` before `docker compose up -d`.
 
 **📖 Full HTTP & Docker instructions: [INSTALL.md](INSTALL.md#http-transport-mode)**
 
@@ -259,8 +270,9 @@ docker compose up -d
 The dynamic MCP automatically stays current with Meraki's API:
 
 ```bash
-# Manually update SDK
-pip install --upgrade meraki
+# Update to the SDK version this project is tested with
+git pull
+pip install -r requirements.txt
 ```
 
 Then restart Claude Desktop. See [UPDATE_GUIDE.md](UPDATE_GUIDE.md) for details.
@@ -296,7 +308,7 @@ The Dynamic MCP provides two ways to access Meraki APIs:
    - And 6 more common operations
 
 2. **Generic API caller** (`call_meraki_api`):
-   - Access ALL 804+ Meraki API methods
+   - Access every Meraki SDK method
    - Example: `call_meraki_api(section="appliance", method="getNetworkApplianceFirewallL3FirewallRules", parameters={"networkId": "L_123"})`
    - Destructive methods require `confirm_destructive_action=true` in `parameters`
 
@@ -357,7 +369,7 @@ This guide provides a comprehensive overview of the curated network tools availa
 ### Basic Organization Operations
 - **`get_organizations()`** - Get a list of organizations the user has access to
 - **`get_organization_details(org_id)`** - Get details for a specific organization
-- **`get_organization_status(org_id)`** - Get the status and health of an organization
+- **`get_organization_status(org_id)`** - Get device counts by status and product type for an organization
 - **`get_organization_inventory(org_id)`** - Get the inventory for an organization
 - **`get_organization_license(org_id)`** - Get the license state for an organization
 - **`get_organization_conf_change(org_id)`** - Get the org change state for an organization
@@ -404,8 +416,8 @@ This guide provides a comprehensive overview of the curated network tools availa
 - **`get_devices(org_id)`** - Get a list of devices from Meraki
 - **`get_network_devices(network_id)`** - Get a list of devices in a specific network
 - **`get_device_details(serial)`** - Get details for a specific device by serial number
-- **`get_device_status(serial)`** - Get the current status of a device
-- **`get_device_uplink(serial)`** - Get the uplink status of a device
+- **`get_device_status(serial, org_id)`** - Get the current status of a device
+- **`get_device_uplink(serial, org_id)`** - Get the uplink status of an MX, MG or Z series device
 
 ### Device Operations
 - **`update_device(serial, device_settings)`** - Update a device in the Meraki organization
@@ -454,8 +466,8 @@ This guide provides a comprehensive overview of the curated network tools availa
 ### Basic Switch Operations
 - **`get_switch_ports(serial)`** - Get ports for a switch
 - **`update_switch_port(serial, port_id, name, tags, enabled, vlan)`** - Update a switch port
-- **`get_switch_vlans(network_id)`** - Get VLANs for a network
-- **`create_switch_vlan(network_id, vlan_id, name, subnet, appliance_ip)`** - Create a switch VLAN
+- **`get_switch_vlans(network_id)`** - Get VLANs for a network (defined on the MX appliance)
+- **`create_switch_vlan(network_id, vlan_id, name, subnet, appliance_ip)`** - Create a VLAN on the network's MX appliance
 
 ### Advanced Switch Management
 - **`get_switch_port_statuses(serial)`** - Get switch port statuses
@@ -470,7 +482,7 @@ This guide provides a comprehensive overview of the curated network tools availa
 ## Appliance Management Tools
 
 ### Basic Appliance Operations
-- **`get_security_center(network_id)`** - Get security information for a network
+- **`get_security_center(network_id, timespan, per_page)`** - Get recent security events for a network
 - **`get_vpn_status(network_id)`** - Get VPN status for a network
 - **`get_firewall_rules(network_id)`** - Get firewall rules for a network
 - **`update_firewall_rules(network_id, rules)`** - Update firewall rules for a network

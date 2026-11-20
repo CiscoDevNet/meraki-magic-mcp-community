@@ -1,20 +1,19 @@
 # Meraki Dynamic MCP - Quick Start Guide
 
-## What Was Created
+This guide gets the dynamic server (`meraki-mcp-dynamic.py`) running in Claude Desktop and walks through the first few calls. For full installation steps on macOS and Windows, HTTP transport and Docker, see [INSTALL.md](INSTALL.md).
 
-I've created a **dynamic version** of your Meraki MCP that automatically exposes **all ~804 Meraki SDK methods** as MCP tools.
+## How the dynamic server works
 
-## Files Created
+The dynamic server does not register one MCP tool per Meraki endpoint. It exposes a small set of tools:
 
-1. **meraki-mcp-dynamic.py** - The dynamic MCP server
-2. **inspect_tools.py** - Safe inspection script (no API calls)
-3. **README-DYNAMIC.md** - Detailed documentation
-4. **COMPARISON.md** - Manual vs. Dynamic comparison
-5. **QUICKSTART.md** - This file
+- **12 pre-registered tools** for the most common operations, such as `getOrganizations`, `getOrganizationNetworks`, `getNetworkClients` and `getDeviceSwitchPorts`
+- **`call_meraki_api`**, a generic caller that reaches every method in the Meraki Python SDK (more than 1,000 as of SDK 4.7)
+- **Discovery tools** (`list_all_methods`, `search_methods`, `get_method_info`) to find methods and their parameters
+- **Cache and configuration tools** (`get_mcp_config`, `cache_stats`, `cache_clear`, `get_cached_response`, `list_cached_responses`, `clear_cached_files`)
 
-## Step 1: Inspect (Safe - No API Calls)
+## Step 1: Inspect (safe, no API calls)
 
-Before using the dynamic MCP, run the inspection script to see what will be available:
+Run the inspection script to see what the SDK provides:
 
 ```bash
 cd /path/to/meraki-magic-mcp-community
@@ -22,23 +21,16 @@ source .venv/bin/activate
 python3 inspect_tools.py
 ```
 
-This will show you:
-- Tool counts by section
-- Sample tool names
-- Parameter details
-- Search examples
-- Coverage comparison
+It prints method counts by section, sample methods, parameter details and search examples. It only inspects the SDK and makes no API calls.
 
-**This is 100% safe** - it doesn't make any API calls.
-
-## Step 2: Update Claude Desktop Config
+## Step 2: Update Claude Desktop config
 
 Edit your Claude Desktop config file:
 
 **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
-**Option A: Replace existing MCP**
+**Option A: Dynamic server only (recommended)**
 ```json
 {
   "mcpServers": {
@@ -60,7 +52,7 @@ Edit your Claude Desktop config file:
 }
 ```
 
-**Option B: Run both (recommended)**
+**Option B: Run both servers**
 ```json
 {
   "mcpServers": {
@@ -100,173 +92,144 @@ Replace `/path/to/` with your actual installation path. For HTTP/Docker deployme
 
 Completely quit and restart Claude Desktop for the config changes to take effect.
 
-## Step 4: Test Discovery Tools (Safe)
+## Step 4: Test the discovery tools (safe)
 
-These helper tools **don't make API calls** - they just list available tools:
+These tools do not call the Meraki API. They only read the SDK's method list.
 
-### List all tools
+### See the sections and how many methods each has
 ```
-Use list_available_tools to show me all available tools
-```
-
-### List tools by category
-```
-Use list_available_tools with category="wireless" to show wireless tools
+Use list_all_methods to show me the available sections
 ```
 
-### Search for tools
+### List the methods in one section
 ```
-Use search_tools with keyword="firewall" to find firewall-related tools
-```
-
-### Get tool details
-```
-Use get_tool_info with tool_name="organizations_getOrganization" to see parameters
+Use list_all_methods with section="wireless"
 ```
 
-## Step 5: Test Read-Only Operations
-
-Start with safe, read-only operations:
-
-### Get organizations
+### Search for methods
 ```
-Use organizations_getOrganizations to list all my organizations
+Use search_methods with keyword="firewall"
 ```
 
-### Get networks
+Several words narrow the search, because a method must contain all of them. Results are capped at 50 unless you pass `limit`:
 ```
-Use organizations_getOrganizationNetworks with organizationId="YOUR_ORG_ID"
-```
-
-### Get devices
-```
-Use organizations_getOrganizationDevices with organizationId="YOUR_ORG_ID"
+Use search_methods with keyword="update wireless ssid"
 ```
 
-### Get network details
+### Get a method's parameters
 ```
-Use networks_getNetwork with networkId="YOUR_NETWORK_ID"
+Use get_method_info with section="organizations" and method="getOrganization"
 ```
 
-## Tool Naming Pattern
+## Step 5: Test read-only operations
 
-All tools follow this pattern: `{section}_{methodName}`
+### Pre-registered tools
+```
+Use getOrganizations to list all my organizations
+```
+```
+Use getOrganizationNetworks to list the networks in my organization
+```
+```
+Use getNetwork with networkId="YOUR_NETWORK_ID"
+```
 
-Examples:
-- `organizations_getOrganization`
-- `networks_getNetworkClients`
-- `wireless_getNetworkWirelessSsids`
-- `devices_rebootDevice`
-- `appliance_updateNetworkApplianceFirewallL3FirewallRules`
+### Any other method, through `call_meraki_api`
+```
+Use call_meraki_api with section="appliance", method="getNetworkApplianceFirewallL3FirewallRules" and parameters={"networkId": "YOUR_NETWORK_ID"}
+```
 
-## Auto-Organization ID
+All method arguments, including IDs such as `networkId` or `serial`, go inside `parameters`.
 
-If you don't provide `organizationId` to a tool that needs it, the MCP will automatically use your `MERAKI_ORG_ID` from the process environment.
+## Automatic organization ID
 
-## Discovery Workflow
+If a method needs `organizationId` and you don't provide it, the server uses `MERAKI_ORG_ID` from its environment.
 
-1. **Find tools** - Use `search_tools` to find what you need
-2. **Check parameters** - Use `get_tool_info` to see required parameters
-3. **Call the tool** - Use the tool with proper parameters
+## Discovery workflow
+
+1. **Find the method** with `search_methods`
+2. **Check its parameters** with `get_method_info`
+3. **Call it** with `call_meraki_api`
 
 Example:
 ```
-1. "Use search_tools with keyword='vpn' to find VPN-related tools"
-2. "Use get_tool_info with tool_name='appliance_getNetworkApplianceVpnSiteToSiteVpn'"
-3. "Use appliance_getNetworkApplianceVpnSiteToSiteVpn with networkId='L_12345'"
+1. "Use search_methods with keyword='site vpn'"
+2. "Use get_method_info with section='appliance' and method='getNetworkApplianceVpnSiteToSiteVpn'"
+3. "Use call_meraki_api with section='appliance', method='getNetworkApplianceVpnSiteToSiteVpn' and parameters={'networkId': 'L_12345'}"
 ```
 
-## Safety Tips
+## Safety
 
-The server defaults to `READ_ONLY_MODE=true`, so write operations are blocked until you explicitly set `READ_ONLY_MODE=false` in the MCP client `env` or process environment.
+The server defaults to `READ_ONLY_MODE=true`. In that mode only `get*` and `list*` methods run; every other method is treated as a write and blocked. Set `READ_ONLY_MODE=false` in the MCP client `env` or process environment when you intend to make changes.
 
-### ✅ Safe Operations (Read-Only)
-- Anything with `get` in the name
-- `list_available_tools`
-- `search_tools`
-- `get_tool_info`
+### Safe (read-only)
+- Any method starting with `get`
+- The discovery, cache and configuration tools
 
-### ⚠️ Use with Caution
-- Anything with `update` in the name
-- Anything with `create` in the name
-- `reboot` operations
+### Use with caution (needs `READ_ONLY_MODE=false`)
+- `create*`, `update*`, `claim*`, `reboot*`, `bulk*`, `batch*` and every other non-read method
 
-### 🛑 Double-Check Before Using
-- Anything with `delete` in the name
-- Anything with `remove` in the name
-- Network/device claiming operations
+### Requires explicit confirmation
+Destructive methods also need `confirm_destructive_action=true` inside `parameters`, after read-only mode has been disabled:
+- `delete*`, `remove*`, `release*`
+- `wipe*`, `unenroll*`, `uninstall*`, `revoke*`, `detach*`
+- Bulk methods ending in `Delete`
 
-Delete/remove calls also require `confirm_destructive_action=true` after read-only mode has been disabled.
+## Common use cases
 
-## Common Use Cases
+Each line is a `section` and `method` for `call_meraki_api`.
 
 ### Monitor network health
 ```
-organizations_getOrganizationDevicesStatuses
-networks_getNetworkEvents
-networks_getNetworkHealthChannelUtilization
+organizations  getOrganizationDevicesStatuses
+networks       getNetworkEvents
+networks       getNetworkHealthAlerts
 ```
 
 ### Manage wireless
 ```
-wireless_getNetworkWirelessSsids
-wireless_updateNetworkWirelessSsid
-wireless_getNetworkWirelessRfProfiles
-wireless_getNetworkWirelessAirMarshal
+wireless  getNetworkWirelessSsids
+wireless  updateNetworkWirelessSsid
+wireless  getNetworkWirelessRfProfiles
+wireless  getNetworkWirelessAirMarshal
 ```
 
 ### Configure firewall
 ```
-appliance_getNetworkApplianceFirewallL3FirewallRules
-appliance_getNetworkApplianceFirewallL7FirewallRules
-appliance_getNetworkApplianceFirewallInboundFirewallRules
+appliance  getNetworkApplianceFirewallL3FirewallRules
+appliance  getNetworkApplianceFirewallL7FirewallRules
+appliance  getNetworkApplianceFirewallInboundFirewallRules
 ```
 
 ### Troubleshoot
 ```
-devices_createDeviceLiveToolsPing
-devices_createDeviceLiveToolsCableTest
-networks_getNetworkEvents
+devices   createDeviceLiveToolsPing
+devices   createDeviceLiveToolsCableTest
+networks  getNetworkEvents
 ```
 
 ### Manage admins
 ```
-organizations_getOrganizationAdmins
-organizations_createOrganizationAdmin
-organizations_updateOrganizationAdmin
+organizations  getOrganizationAdmins
+organizations  createOrganizationAdmin
+organizations  updateOrganizationAdmin
 ```
 
-## Error Messages
+## Large responses
 
-All tools return formatted JSON. Errors look like:
+Responses above `MAX_RESPONSE_TOKENS` are saved to a cache file and returned as a short preview with the file path. Use `get_cached_response` to page through the full data. See [OPTIMIZATIONS.md](OPTIMIZATIONS.md) for details.
+
+## Error messages
+
+All tools return JSON. Errors look like:
 
 ```json
-{
-  "error": "Meraki API Error",
-  "message": "Invalid network ID",
-  "status": 404
-}
+{"error":"Meraki API Error","message":"Invalid network ID","status":404}
 ```
 
-## Next Steps
+## More documentation
 
-1. ✅ Run `inspect_tools.py` to see available tools
-2. ✅ Update Claude Desktop config
-3. ✅ Restart Claude Desktop
-4. ✅ Test discovery tools (list_available_tools, search_tools)
-5. ✅ Test read-only operations
-6. ✅ Gradually explore more advanced features
-
-## Support
-
-- **README-DYNAMIC.md** - Full documentation
-- **COMPARISON.md** - Manual vs. Dynamic comparison
-- **inspect_tools.py** - See all available tools safely
-
-## Coverage
-
-- **Manual MCP**: 40 tools (0.57% of API)
-- **Dynamic MCP**: ~804 tools (100% of SDK)
-- **Increase**: 20x more coverage!
-
-Happy automating! 🚀
+- [README-DYNAMIC.md](README-DYNAMIC.md) - Dynamic server reference
+- [COMPARISON.md](COMPARISON.md) - Manual vs. dynamic server
+- [OPTIMIZATIONS.md](OPTIMIZATIONS.md) - Caching, response size limits and read-only mode
+- [UPDATE_GUIDE.md](UPDATE_GUIDE.md) - Upgrading the Meraki SDK
