@@ -32,3 +32,10 @@ jobs:
       # inspect it without making API calls.
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+      - name: Verify the SDK cache as the container user
+        run: |
+          docker build -t meraki-mcp-test .
+          docker run --rm -i --network none --entrypoint python \
+            -e MERAKI_API_KEY=offline-test -e MCP_TRANSPORT=stdio \
+            meraki-mcp-test - < tests/check_container_sdk_cache.py

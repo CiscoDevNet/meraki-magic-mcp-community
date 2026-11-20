@@ -187,9 +187,9 @@ RESPONSE_CACHE_MAX_AGE_HOURS=24  # Delete cached files older than this (default:
 RESPONSE_CACHE_MAX_MB=100        # Cap on total size of cached files (default: 100, 0 = no cap)
 ```
 
-Cached files are pruned automatically at startup and after each new file is written: files older than `RESPONSE_CACHE_MAX_AGE_HOURS` are deleted, then the oldest files until the directory is within `RESPONSE_CACHE_MAX_MB`. Files are created with owner-only permissions because responses can contain sensitive configuration such as pre-shared keys.
+Cleanup recognizes current and older response files by their filename and matching metadata. At startup and after each save, files older than `RESPONSE_CACHE_MAX_AGE_HOURS` are deleted, then the oldest files until the directory is within `RESPONSE_CACHE_MAX_MB`. Files are created with owner-only permissions because responses can contain sensitive configuration such as pre-shared keys.
 
-Tool responses are returned as compact JSON (no indentation), which uses roughly 40% fewer tokens than pretty-printed output on typical list responses. `MAX_RESPONSE_TOKENS` is measured against that same compact text. Cached files on disk remain indented for reading with `jq` or an editor.
+Tool responses are returned as compact JSON (no indentation), which uses roughly 40% fewer tokens than pretty-printed output on typical list responses. `MAX_RESPONSE_TOKENS` is measured against that same compact text. The minimum budget is 7 estimated tokens. Small budgets omit optional fields and may return a filename that `get_cached_response` accepts directly. If only the truncation marker fits, use `list_cached_responses` to find the file. Disk eviction also expires the corresponding in-memory preview on its next read. Cached files on disk remain indented for reading with `jq` or an editor.
 
 ### Example - Large Response:
 ```

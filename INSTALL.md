@@ -388,7 +388,7 @@ Requests without `Authorization: Bearer <token>` get `401 Unauthorized`. Clients
 
 - Keep `MCP_HOST=127.0.0.1` (the default) unless other machines must connect. The server warns at startup when it listens on another address without a token.
 - The token is sent in plain text over HTTP. For access across a network, put the server behind a reverse proxy that terminates TLS (HTTPS).
-- Start HTTP mode with `python meraki-mcp-dynamic.py` as shown below. `MCP_AUTH_TOKEN` is enforced by the server's own startup code, so a launcher that builds its own HTTP app does not apply it.
+- Both servers enforce `MCP_AUTH_TOKEN` for Streamable HTTP and SSE when started with Python, the FastMCP CLI, or the exported ASGI app.
 
 ### Running in HTTP Mode (Local)
 
@@ -503,7 +503,7 @@ You should see a JSON response with `serverInfo.name` = "Meraki Magic MCP - Full
 
 Use the mcp-remote configuration from [Running in HTTP Mode](#running-in-http-mode-local) with the URL `http://localhost:8000/mcp`.
 
-The container runs as an unprivileged user (UID 10001). If you upgrade from an image that ran as root and the existing `meraki-cache` volume already holds cached files, it stays owned by root: the server logs a warning and runs without file caching. Recreate the volume with `docker compose down -v` (cached files are disposable) to restore it.
+The container runs as UID 10001 with a private home directory for the Meraki SDK’s rate-limit cache. If you upgrade from an image that ran as root and the existing `meraki-cache` volume already holds cached files, it stays owned by root: the server logs a warning and runs without file caching. Recreate the volume with `docker compose down -v` (cached files are disposable) to restore it.
 
 ### Docker Configuration
 
@@ -514,6 +514,8 @@ Environment variables can be exported in the host shell (used by `docker compose
 | `MCP_TRANSPORT` | `http` | Transport mode (http, stdio, sse) |
 | `MCP_HOST` | `0.0.0.0` | Bind address inside the container |
 | `MCP_AUTH_TOKEN` | *(unset)* | Bearer token required on every HTTP request; strongly recommended |
+| `RESPONSE_CACHE_MAX_AGE_HOURS` | `24` | Maximum age of cached responses in hours. Use `0` to disable age-based cleanup. |
+| `RESPONSE_CACHE_MAX_MB` | `100` | Response file quota in MiB. Use `0` to disable size-based cleanup. |
 | `MCP_PUBLISH_HOST` | `127.0.0.1` | Host interface `docker compose` publishes port 8000 on; set `0.0.0.0` for remote access |
 | `MCP_PORT` | `8000` | Bind port |
 | `MCP_SERVER` | `dynamic` | Server file: `dynamic` (full API) or `manual` (curated tools) |

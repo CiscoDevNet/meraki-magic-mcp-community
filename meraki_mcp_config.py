@@ -5,7 +5,6 @@
 import hmac
 import json
 import os
-import sys
 from typing import Any, Callable, MutableMapping
 
 
@@ -303,16 +302,6 @@ def http_security_warnings(host: str, token: str | None) -> list[str]:
             "Generate a stronger one, e.g. with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
         )
     return warnings
-
-
-def build_http_app(mcp: Any, transport: str, host: str) -> Callable:
-    """Build the ASGI app for an HTTP transport, requiring MCP_AUTH_TOKEN when it is set."""
-    transport = normalize_transport(transport)
-    app = mcp.sse_app() if transport == "sse" else mcp.streamable_http_app()
-    token = get_auth_token()
-    for warning in http_security_warnings(host, token):
-        print(warning, file=sys.stderr)
-    return BearerTokenMiddleware(app, token) if token else app
 
 
 def serve_http(app: Callable, host: str, port: int) -> None:

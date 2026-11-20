@@ -10,10 +10,9 @@ import asyncio
 import functools
 from typing import Dict, List, Optional, Any, TypedDict, Union, Callable
 from pydantic import BaseModel, Field
-from mcp.server.fastmcp import FastMCP
+from meraki_mcp_server import MerakiMCP
 from meraki_mcp_config import (
     HTTP_TRANSPORTS,
-    build_http_app,
     get_auth_token,
     get_meraki_base_url,
     get_meraki_caller,
@@ -30,7 +29,7 @@ MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 
 # Create an MCP server
-mcp = FastMCP("Meraki Magic MCP", host=MCP_HOST, port=MCP_PORT)
+mcp = MerakiMCP("Meraki Magic MCP", host=MCP_HOST, port=MCP_PORT)
 
 # Configuration
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY")
@@ -1163,7 +1162,7 @@ def greeting(name: str) -> str:
 
 # Module-level ASGI app for HTTP transports, also usable with an external uvicorn.
 # It requires "Authorization: Bearer <MCP_AUTH_TOKEN>" when MCP_AUTH_TOKEN is set.
-app = build_http_app(mcp, MCP_TRANSPORT, MCP_HOST) if MCP_TRANSPORT in HTTP_TRANSPORTS else None
+app = mcp.http_app(MCP_TRANSPORT) if MCP_TRANSPORT in HTTP_TRANSPORTS else None
 
 if __name__ == "__main__":
     transport = normalize_transport(MCP_TRANSPORT)

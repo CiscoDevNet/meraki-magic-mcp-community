@@ -17,6 +17,8 @@ services:
       MERAKI_BASE_URL: ${MERAKI_BASE_URL:-https://api.meraki.com/api/v1}
       MERAKI_PYTHON_SDK_CALLER: ${MERAKI_PYTHON_SDK_CALLER:-}
       READ_ONLY_MODE: ${READ_ONLY_MODE:-true}
+      RESPONSE_CACHE_MAX_AGE_HOURS: ${RESPONSE_CACHE_MAX_AGE_HOURS:-24}
+      RESPONSE_CACHE_MAX_MB: ${RESPONSE_CACHE_MAX_MB:-100}
     volumes:
       - meraki-cache:/app/.meraki_cache
     restart: unless-stopped

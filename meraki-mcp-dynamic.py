@@ -10,18 +10,19 @@ import asyncio
 import functools
 import inspect
 import hashlib
+import re
+import tempfile
 import threading
 import time
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
-from mcp.server.fastmcp import FastMCP
+from meraki_mcp_server import MerakiMCP
 from pydantic import Field
 from meraki_mcp_config import (
     CONFIRM_DESTRUCTIVE_ACTION_PARAM,
     SDK_SECTIONS,
     HTTP_TRANSPORTS,
-    build_http_app,
     get_auth_token,
     get_meraki_base_url,
     get_meraki_caller,
@@ -41,7 +42,7 @@ MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 
 # Create an MCP server
-mcp = FastMCP("Meraki Magic MCP - Full API", host=MCP_HOST, port=MCP_PORT)
+mcp = MerakiMCP("Meraki Magic MCP - Full API", host=MCP_HOST, port=MCP_PORT)
 
 # Configuration
 MERAKI_API_KEY = os.getenv("MERAKI_API_KEY")
@@ -63,6 +64,10 @@ READ_ONLY_MODE = get_read_only_mode()
 
 # Response size management (new)
 MAX_RESPONSE_TOKENS = int(os.getenv("MAX_RESPONSE_TOKENS", "5000"))  # Max tokens in response
+# Seven estimated tokens fit the smallest valid truncation notice.
+if MAX_RESPONSE_TOKENS < 7:
+    raise ValueError("MAX_RESPONSE_TOKENS must be at least 7")
+MAX_RESPONSE_CHARS = 4 * MAX_RESPONSE_TOKENS
 MAX_PER_PAGE = int(os.getenv("MAX_PER_PAGE", "100"))  # Max items per page for paginated endpoints
 ENABLE_FILE_CACHING = os.getenv("ENABLE_FILE_CACHING", "true").lower() == "true"
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -128,6 +133,7 @@ class SimpleCache:
         self._lock = threading.Lock()
         self.cache = {}  # insertion-ordered: oldest entry first
         self.timestamps = {}
+        self.backing_files = {}
 
     def _is_expired(self, key: str, now: float) -> bool:
         return now - self.timestamps[key] >= CACHE_TTL_SECONDS
@@ -135,17 +141,19 @@ class SimpleCache:
     def _delete(self, key: str):
         del self.cache[key]
         del self.timestamps[key]
+        self.backing_files.pop(key, None)
 
     def get(self, key: str) -> Optional[Any]:
         """Get cached value if not expired"""
         with self._lock:
             if key in self.cache:
-                if not self._is_expired(key, time.monotonic()):
+                backing_file = self.backing_files.get(key)
+                if not self._is_expired(key, time.monotonic()) and (backing_file is None or os.path.isfile(backing_file)):
                     return self.cache[key]
                 self._delete(key)
             return None
 
-    def set(self, key: str, value: Any):
+    def set(self, key: str, value: Any, backing_file: Optional[str] = None):
         """Set cached value, purging expired entries and enforcing the size cap"""
         with self._lock:
             now = time.monotonic()
@@ -156,6 +164,8 @@ class SimpleCache:
                 self._delete(stale)
             self.cache[key] = value
             self.timestamps[key] = now
+            if backing_file is not None:
+                self.backing_files[key] = backing_file
             if CACHE_MAX_ITEMS > 0:
                 while len(self.cache) > CACHE_MAX_ITEMS:
                     self._delete(next(iter(self.cache)))
@@ -165,6 +175,7 @@ class SimpleCache:
         with self._lock:
             self.cache.clear()
             self.timestamps.clear()
+            self.backing_files.clear()
 
     def invalidate(self, prefix: str):
         """Remove all cache entries whose key starts with the given prefix."""
@@ -191,28 +202,60 @@ cache = SimpleCache()
 
 def estimate_token_count(text: str) -> int:
     """Rough estimate of token count (4 chars ≈ 1 token)"""
-    return len(text) // 4
+    return (len(text) + 3) // 4
 
 def save_response_to_file(data: Any, section: str, method: str, params: Dict) -> str:
     """Save large response to a file and return the file path"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     param_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
-    filename = f"{section}_{method}_{param_hash}_{timestamp}.json"
-    filepath = os.path.join(RESPONSE_CACHE_DIR, filename)
-
-    # Owner-only permissions: responses can include secrets such as SSID pre-shared keys
-    fd = os.open(filepath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w') as f:
-        json.dump({
-            "cached_at": timestamp,
-            "section": section,
-            "method": method,
-            "parameters": params,
-            "data": data
-        }, f, indent=2)
+    prefix = f"{section}_{method}_{param_hash}_{timestamp}_"
+    # Publish a complete, private file with a unique name, even for concurrent identical calls.
+    temp = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=RESPONSE_CACHE_DIR,
+                                       prefix=prefix, suffix=".tmp", delete=False)
+    pending = Path(temp.name)
+    filepath = str(pending.with_suffix(".json"))
+    try:
+        with temp:
+            json.dump({
+                "cached_at": timestamp,
+                "section": section,
+                "method": method,
+                "parameters": params,
+                "data": data
+            }, temp, indent=2)
+        os.replace(pending, filepath)
+    finally:
+        pending.unlink(missing_ok=True)
 
     prune_response_cache(keep=filepath)
     return filepath
+
+# Older releases used the same envelope and filename without the unique suffix.
+_CACHE_FILENAME = re.compile(
+    r"([A-Za-z0-9]+)_([A-Za-z0-9]+)_[0-9a-f]{8}_(\d{8}_\d{6})(?:_[a-z0-9_]+)?\.json"
+)
+
+
+def response_cache_entries():
+    """Yield only regular files with a cache filename and the matching on-disk envelope."""
+    with os.scandir(RESPONSE_CACHE_DIR) as entries:
+        for entry in entries:
+            match = _CACHE_FILENAME.fullmatch(entry.name)
+            if not match or not entry.is_file(follow_symlinks=False):
+                continue
+            section, method, timestamp = match.groups()
+            header = (f'{{\n  "cached_at": "{timestamp}",\n  "section": "{section}",\n'
+                      f'  "method": "{method}",\n  "parameters": ')
+            try:
+                # Universal newlines also recognize caches written on Windows.
+                with open(entry.path, encoding="ascii", errors="replace") as f:
+                    if f.read(len(header)) != header:
+                        continue
+                stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            yield entry, stat
+
 
 def prune_response_cache(keep: Optional[str] = None) -> Dict[str, int]:
     """Delete cached response files beyond the configured retention.
@@ -224,11 +267,8 @@ def prune_response_cache(keep: Optional[str] = None) -> Dict[str, int]:
     """
     removed = {"expired": 0, "over_quota": 0}
     try:
-        entries = []
-        for entry in os.scandir(RESPONSE_CACHE_DIR):
-            if entry.is_file(follow_symlinks=False) and entry.name.endswith('.json'):
-                stat = entry.stat(follow_symlinks=False)
-                entries.append((stat.st_mtime, stat.st_size, entry.path))
+        entries = [(stat.st_mtime, stat.st_size, entry.path)
+                   for entry, stat in response_cache_entries()]
     except OSError:
         return removed
 
@@ -270,7 +310,10 @@ def _validate_cache_filepath(filepath: str) -> str:
     Raises ValueError if the path escapes the cache directory.
     """
     cache_root = Path(RESPONSE_CACHE_DIR).resolve()
-    resolved = Path(filepath).resolve()
+    path = Path(filepath)
+    if _CACHE_FILENAME.fullmatch(filepath):
+        path = cache_root / filepath
+    resolved = path.resolve()
     if not str(resolved).startswith(str(cache_root) + os.sep) and resolved != cache_root:
         raise ValueError(
             f"filepath must be inside the cache directory ({cache_root})"
@@ -298,7 +341,15 @@ def _truncate_value(value: Any, budget_chars: int) -> Any:
     if isinstance(value, dict):
         return f"<object with {len(value)} keys - see cached file>"
     text = value if isinstance(value, str) else str(value)
-    return text[:max(budget_chars - 20, 0)] + "... <truncated>"
+    suffix = "... <truncated>"
+    lo, hi = 0, min(len(text), budget_chars)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(to_json(text[:mid] + suffix)) <= budget_chars:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + suffix
 
 def build_preview(data: Any, budget_chars: Optional[int] = None) -> Any:
     """Build a preview of data that serializes to roughly budget_chars at most.
@@ -335,32 +386,46 @@ def build_preview(data: Any, budget_chars: Optional[int] = None) -> Any:
 
     return _truncate_value(data, budget)
 
-def create_truncated_response(data: Any, filepath: str, section: str, method: str, params: Dict) -> Dict:
-    """Create a truncated response with metadata about the full cached result"""
-    item_count = len(data) if isinstance(data, list) else 1
-    preview = build_preview(data)
+def create_truncated_response(data: Any, filepath: str, section: str, method: str,
+                              params: Dict, estimated_tokens: int, pagination_limited: bool) -> Dict:
+    """Fit the retrieval path, preview and optional metadata in the serialized budget."""
+    response = {"_response_truncated": True}
 
-    response = {
-        "_response_truncated": True,
-        "_reason": f"Response too large (~{estimate_token_count(json.dumps(data))} tokens)",
-        "_full_response_cached": filepath,
-        "_total_items": item_count,
-        "_showing": "preview" if isinstance(data, list) else "summary",
-        "_preview": preview,
-        "_hints": {
-            "reduce_page_size": f"Reduce request: Use perPage parameter with value <= {MAX_PER_PAGE}",
-            "access_via_mcp_paginated": f"get_cached_response(filepath='{filepath}', offset=0, limit=10) - Returns 10 items at a time",
-            "access_via_cli_full": f"cat {filepath} | jq '.data' - View all data",
-            "search_via_cli": f"cat {filepath} | jq '.data[] | select(.field == \"value\")' - Search/filter",
-            "count_via_cli": f"cat {filepath} | jq '.data | length' - Count items",
-            "recommendation": "For large datasets, command-line tools (jq, grep) are recommended over MCP tools"
-        },
-        "section": section,
-        "method": method,
-        "parameters": params
-    }
+    def include(key: str, value: Any) -> bool:
+        response[key] = value
+        if len(to_json(response)) <= MAX_RESPONSE_CHARS:
+            return True
+        del response[key]
+        return False
+
+    if not include("_full_response_cached", filepath):
+        if not include("_full_response_cached", Path(filepath).name):
+            return response
+
+    if pagination_limited:
+        include("_pagination_limited", True)
+    # Account for the property name, quotes and delimiters before building the preview.
+    room = MAX_RESPONSE_CHARS - len(to_json({**response, "_preview": None})) + len("null")
+    if room > 0:
+        include("_preview", build_preview(data, min(room, PREVIEW_BUDGET_CHARS)))
+    include("_total_items", len(data) if isinstance(data, list) else 1)
     if isinstance(data, dict):
-        response["_keys"] = _truncate_value(list(data.keys()), PREVIEW_BUDGET_CHARS // 4)
+        include("_keys", _truncate_value(list(data), PREVIEW_BUDGET_CHARS // 4))
+    include("section", section)
+    include("method", method)
+    include("_reason", f"Response too large (~{estimated_tokens} tokens)")
+    include("_showing", "preview" if isinstance(data, list) else "summary")
+    if pagination_limited:
+        include("_pagination_message", f"Request modified: pagination limited to {MAX_PER_PAGE} items per page")
+    include("parameters", params)
+    include("_hints", {
+        "reduce_page_size": f"Reduce request: Use perPage parameter with value <= {MAX_PER_PAGE}",
+        "access_via_mcp_paginated": f"get_cached_response(filepath='{filepath}', offset=0, limit=10) - Returns 10 items at a time",
+        "access_via_cli_full": f"cat {filepath} | jq '.data' - View all data",
+        "search_via_cli": f"cat {filepath} | jq '.data[] | select(.field == \"value\")' - Search/filter",
+        "count_via_cli": f"cat {filepath} | jq '.data | length' - Count items",
+        "recommendation": "For large datasets, command-line tools (jq, grep) are recommended over MCP tools"
+    })
     return response
 
 def enforce_pagination_limits(params: Dict, method: str) -> Dict:
@@ -494,7 +559,9 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
             if cached is not None:
                 # Annotate a copy so the stored entry is never modified
                 if isinstance(cached, dict):
-                    cached = {**cached, '_from_cache': True}
+                    annotated = to_json({**cached, '_from_cache': True})
+                    if len(annotated) <= MAX_RESPONSE_CHARS:
+                        return annotated
                 return to_json(cached)
 
         # Call the method
@@ -506,7 +573,14 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
 
         # Check response size and handle large responses
         # Measure the same compact serialization that is returned to the client
-        result_json = to_json(result)
+        response_data = result
+        if pagination_limited and isinstance(result, dict):
+            response_data = {
+                **result,
+                "_pagination_limited": True,
+                "_pagination_message": f"Request modified: pagination limited to {MAX_PER_PAGE} items per page",
+            }
+        result_json = to_json(response_data)
         estimated_tokens = estimate_token_count(result_json)
 
         filepath = None
@@ -520,37 +594,23 @@ def _call_meraki_method_internal(section: str, method: str, params: dict) -> str
 
         if filepath:
             # Create truncated response with metadata
-            truncated_response = create_truncated_response(result, filepath, section, method, original_params)
-
-            # Add pagination warning if limits were enforced
-            if pagination_limited:
-                truncated_response["_pagination_limited"] = True
-                truncated_response["_pagination_message"] = f"Request modified: pagination limited to {MAX_PER_PAGE} items per page"
+            truncated_response = create_truncated_response(
+                result, filepath, section, method, original_params, estimated_tokens, pagination_limited
+            )
 
             # Cache the truncated response (not the full result)
             if ENABLE_CACHING and is_read:
                 cache_key = create_cache_key(section, method, params)
-                cache.set(cache_key, truncated_response)
+                cache.set(cache_key, truncated_response, backing_file=filepath)
 
             return to_json(truncated_response)
-
-        # Normal response (small enough, or file caching unavailable)
-        response_data = result
-        if pagination_limited and isinstance(response_data, dict):
-            # Annotate a copy so the SDK's result object is never modified
-            response_data = {
-                **response_data,
-                "_pagination_limited": True,
-                "_pagination_message": f"Request modified: pagination limited to {MAX_PER_PAGE} items per page",
-            }
 
         # Cache read results
         if ENABLE_CACHING and is_read:
             cache_key = create_cache_key(section, method, params)
             cache.set(cache_key, response_data)
 
-        # Reuse the serialization from the size check unless the response was annotated
-        return result_json if response_data is result else to_json(response_data)
+        return result_json
 
     except meraki.exceptions.APIError as e:
         return to_json({
@@ -1017,17 +1077,14 @@ async def list_cached_responses() -> str:
             })
 
         files = []
-        for filename in os.listdir(RESPONSE_CACHE_DIR):
-            if filename.endswith('.json'):
-                filepath = os.path.join(RESPONSE_CACHE_DIR, filename)
-                stat = os.stat(filepath)
-                files.append({
-                    "filename": filename,
-                    "filepath": filepath,
-                    "size_bytes": stat.st_size,
-                    "size_kb": round(stat.st_size / 1024, 2),
-                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                })
+        for entry, stat in response_cache_entries():
+            files.append({
+                "filename": entry.name,
+                "filepath": entry.path,
+                "size_bytes": stat.st_size,
+                "size_kb": round(stat.st_size / 1024, 2),
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
 
         files.sort(key=lambda x: x['modified'], reverse=True)
 
@@ -1061,23 +1118,17 @@ async def clear_cached_files(older_than_hours: int = 24) -> str:
         deleted = []
         kept = []
 
-        for filename in os.listdir(RESPONSE_CACHE_DIR):
-            if filename.endswith('.json'):
-                filepath = os.path.join(RESPONSE_CACHE_DIR, filename)
-                file_time = datetime.fromtimestamp(os.path.getmtime(filepath))
-                age_hours = (now - file_time).total_seconds() / 3600
-
-                if age_hours > older_than_hours:
-                    os.remove(filepath)
-                    deleted.append({
-                        "filename": filename,
-                        "age_hours": round(age_hours, 2)
-                    })
-                else:
-                    kept.append({
-                        "filename": filename,
-                        "age_hours": round(age_hours, 2)
-                    })
+        for entry, stat in response_cache_entries():
+            age_hours = (now - datetime.fromtimestamp(stat.st_mtime)).total_seconds() / 3600
+            item = {"filename": entry.name, "age_hours": round(age_hours, 2)}
+            if age_hours > older_than_hours:
+                try:
+                    os.remove(entry.path)
+                except FileNotFoundError:
+                    continue
+                deleted.append(item)
+            else:
+                kept.append(item)
 
         return to_json({
             "cache_dir": RESPONSE_CACHE_DIR,
@@ -1093,7 +1144,7 @@ async def clear_cached_files(older_than_hours: int = 24) -> str:
 
 # Module-level ASGI app for HTTP transports, also usable with an external uvicorn.
 # It requires "Authorization: Bearer <MCP_AUTH_TOKEN>" when MCP_AUTH_TOKEN is set.
-app = build_http_app(mcp, MCP_TRANSPORT, MCP_HOST) if MCP_TRANSPORT in HTTP_TRANSPORTS else None
+app = mcp.http_app(MCP_TRANSPORT) if MCP_TRANSPORT in HTTP_TRANSPORTS else None
 
 if __name__ == "__main__":
     transport = normalize_transport(MCP_TRANSPORT)

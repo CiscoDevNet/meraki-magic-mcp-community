@@ -118,6 +118,8 @@ def fake_runtime_modules():
     fake_mcp = types.ModuleType("mcp")
     fake_mcp_server = types.ModuleType("mcp.server")
     fake_fastmcp = types.ModuleType("mcp.server.fastmcp")
+    fake_server = types.ModuleType("meraki_mcp_server")
+    fake_server.MerakiMCP = FakeFastMCP
     fake_fastmcp.FastMCP = FakeFastMCP
 
     fake_pydantic = types.ModuleType("pydantic")
@@ -126,6 +128,7 @@ def fake_runtime_modules():
 
     module_overrides = {
         "meraki": fake_meraki,
+        "meraki_mcp_server": fake_server,
         "mcp": fake_mcp,
         "mcp.server": fake_mcp_server,
         "mcp.server.fastmcp": fake_fastmcp,
@@ -516,6 +519,27 @@ class DynamicServerTruncationTests(unittest.TestCase):
         self.assertEqual(result[:3], response["_preview"])
         self.assertEqual(300, response["_total_items"])
 
+    def test_serialized_budget_includes_escape_sequences_parameters_and_cache_metadata(self):
+        rows = ['🟢\n"\\' * 3000]
+        for budget in (7, 50, 500, 5000):
+            with self.subTest(budget=budget), dynamic_module(
+                "test_serialized_budget", MAX_RESPONSE_TOKENS=str(budget)
+            ) as (module, directory):
+                module.dashboard.networks.getNetwork = lambda networkId, perPage: rows
+                params = {"networkId": "a" * 30000, "perPage": 5000}
+                for _ in range(2):
+                    text = module._call_meraki_method_internal("networks", "getNetwork", params)
+                    self.assertLessEqual(len(text), 4 * budget)
+                    summary = json.loads(text)
+                    self.assertTrue(summary["_response_truncated"])
+                    if budget >= 50:
+                        self.assertEqual(rows, module.load_response_from_file(summary["_full_response_cached"]))
+                    if budget >= 500:
+                        self.assertIn("_preview", summary)
+                files = json.loads(asyncio.run(module.list_cached_responses()))["files"]
+                self.assertEqual(1, len(files))
+                self.assertEqual(rows, module.load_response_from_file(files[0]["filepath"]))
+
     def test_small_response_is_returned_unchanged(self):
         result = {"id": "N_1", "name": "small"}
         _, _, response, _ = self._call_with_result(result)
@@ -750,11 +774,19 @@ class MemoryCacheBoundTests(unittest.TestCase):
 
 class FileCacheRetentionTests(unittest.TestCase):
     @staticmethod
-    def _write(directory, name, size, age_hours):
+    def _write(directory, label, size, age_hours):
+        """Create an authentic legacy response with a known size and modification time."""
+        import hashlib
         import time
 
-        path = directory / name
-        path.write_text("x" * size)
+        timestamp = "20250119_143022"
+        params = {"networkId": label}
+        digest = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
+        path = directory / f"networks_getNetwork_{digest}_{timestamp}.json"
+        envelope = {"cached_at": timestamp, "section": "networks", "method": "getNetwork",
+                    "parameters": params, "data": ""}
+        content = json.dumps(envelope, indent=2)
+        path.write_text(content.ljust(size), encoding="utf-8")
         stamp = time.time() - age_hours * 3600
         os.utime(path, (stamp, stamp))
         return path
@@ -766,16 +798,26 @@ class FileCacheRetentionTests(unittest.TestCase):
             directory = Path(cache_dir)
             old = self._write(directory, "old.json", 10, age_hours=30)
             fresh = self._write(directory, "fresh.json", 10, age_hours=1)
-            other = self._write(directory, "notes.txt", 10, age_hours=300)
+            other = directory / "project-settings.json"
+            other.write_text('{"theme":"light"}')
+            lookalike = directory / "networks_getNetwork_12345678_20250119_143022.json"
+            lookalike.write_text('{"data":"user settings"}')
+            for path in (other, lookalike):
+                os.utime(path, (0, 0))
             with patch.dict(
                 os.environ,
                 {"MERAKI_API_KEY": "dummy", "RESPONSE_CACHE_DIR": cache_dir},
                 clear=True,
             ), fake_runtime_modules():
-                load_script_module("meraki-mcp-dynamic.py", "test_file_cache_startup")
+                module = load_script_module("meraki-mcp-dynamic.py", "test_file_cache_startup")
             self.assertFalse(old.exists())
             self.assertTrue(fresh.exists())
+            listed = json.loads(asyncio.run(module.list_cached_responses()))["files"]
+            self.assertEqual([fresh.name], [item["filename"] for item in listed])
+            cleared = json.loads(asyncio.run(module.clear_cached_files(older_than_hours=0)))
+            self.assertEqual(1, cleared["deleted_count"])
             self.assertTrue(other.exists())
+            self.assertTrue(lookalike.exists())
 
     def test_size_quota_removes_oldest_files_first(self):
         with dynamic_module(
@@ -785,7 +827,10 @@ class FileCacheRetentionTests(unittest.TestCase):
             middle = self._write(directory, "b.json", 500, age_hours=5)
             newest = self._write(directory, "c.json", 500, age_hours=1)
 
+            unrelated = directory / "inventory.json"
+            unrelated.write_text(json.dumps({"notes": "x" * 3000}))
             removed = module.prune_response_cache()
+            self.assertTrue(unrelated.exists())
 
             self.assertEqual({"expired": 0, "over_quota": 1}, removed)
             self.assertFalse(oldest.exists())
@@ -799,6 +844,27 @@ class FileCacheRetentionTests(unittest.TestCase):
             old = self._write(directory, "a.json", 5000, age_hours=5000)
             self.assertEqual({"expired": 0, "over_quota": 0}, module.prune_response_cache())
             self.assertTrue(old.exists())
+
+    def test_repeat_read_regenerates_file_evicted_by_quota(self):
+        from unittest.mock import Mock
+
+        with dynamic_module("test_file_cache_refetch", MAX_RESPONSE_TOKENS="100",
+                            RESPONSE_CACHE_MAX_MB="0.002") as (module, directory):
+            get_network = Mock(side_effect=lambda networkId: {"id": networkId, "data": "x" * 1800})
+            module.dashboard.networks.getNetwork = get_network
+
+            def read(network):
+                return json.loads(module._call_meraki_method_internal(
+                    "networks", "getNetwork", {"networkId": network}))
+
+            first = read("A")
+            read("B")
+            self.assertFalse(Path(first["_full_response_cached"]).exists())
+            renewed = read("A")
+            self.assertNotIn("_from_cache", renewed)
+            self.assertEqual("A", module.load_response_from_file(renewed["_full_response_cached"])["id"])
+            self.assertEqual(renewed["_full_response_cached"], read("A")["_full_response_cached"])
+            self.assertEqual(3, get_network.call_count)
 
     def test_unwritable_cache_directory_disables_file_caching_instead_of_crashing(self):
         import tempfile
@@ -1065,25 +1131,10 @@ class HttpAuthTests(unittest.TestCase):
         self.assertEqual(1, len(weak))
         self.assertIn("shorter than", weak[0])
 
-    def test_build_http_app_wraps_only_when_a_token_is_set(self):
-        class FakeMcp:
-            def streamable_http_app(self):
-                return "streamable"
-
-            def sse_app(self):
-                return "sse"
-
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual("streamable", config.build_http_app(FakeMcp(), "http", "127.0.0.1"))
-            self.assertEqual("sse", config.build_http_app(FakeMcp(), "sse", "127.0.0.1"))
-        with patch.dict(os.environ, {"MCP_AUTH_TOKEN": self.TOKEN}, clear=True):
-            wrapped = config.build_http_app(FakeMcp(), "streamable-http", "127.0.0.1")
-        self.assertIsInstance(wrapped, config.BearerTokenMiddleware)
-        self.assertEqual("streamable", wrapped.app)
-
-    def test_both_servers_enforce_the_token_on_a_real_mcp_session(self):
+    def test_both_launchers_secure_http_and_sse_for_each_server(self):
         if not fastmcp_available():
             self.skipTest("mcp is not installed")
+        from fastmcp.cli.run import run_v1_server_async
         from starlette.testclient import TestClient
 
         initialize = {
@@ -1091,25 +1142,37 @@ class HttpAuthTests(unittest.TestCase):
             "params": {"protocolVersion": "2025-03-26", "capabilities": {},
                        "clientInfo": {"name": "test", "version": "1"}},
         }
-        headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
-        for filename in ["meraki-mcp.py", "meraki-mcp-dynamic.py"]:
-            with self.subTest(filename=filename), patch.dict(
-                os.environ,
-                {"MERAKI_API_KEY": "dummy", "MCP_TRANSPORT": "http", "MCP_AUTH_TOKEN": self.TOKEN,
-                 "ENABLE_FILE_CACHING": "false"},
-                clear=True,
-            ), fake_meraki_module():
-                module = load_script_module(filename, f"test_http_auth_{filename.replace('-', '_')}")
-                # The MCP SDK's DNS-rebinding protection only accepts loopback Host headers
-                with TestClient(module.app, base_url="http://127.0.0.1:8000") as client:
-                    denied = client.post("/mcp", json=initialize, headers=headers)
-                    allowed = client.post(
-                        "/mcp", json=initialize,
-                        headers={**headers, "Authorization": f"Bearer {self.TOKEN}"},
-                    )
-                self.assertEqual(401, denied.status_code)
-                self.assertEqual(200, allowed.status_code)
-                self.assertIn('"serverInfo"', allowed.text)
+        accept = {"Accept": "application/json, text/event-stream"}
+        for filename in ("meraki-mcp.py", "meraki-mcp-dynamic.py"):
+            for transport in ("http", "sse"):
+                for launcher in ("module", "cli"):
+                    with self.subTest(filename=filename, transport=transport, launcher=launcher), patch.dict(
+                        os.environ,
+                        {"MERAKI_API_KEY": "dummy", "MCP_AUTH_TOKEN": self.TOKEN,
+                         "MCP_TRANSPORT": transport if launcher == "module" else "stdio",
+                         "ENABLE_FILE_CACHING": "false"}, clear=True
+                    ), fake_meraki_module():
+                        module = load_script_module(filename, "test_transport_server")
+                        if launcher == "cli":
+                            # Exercise FastMCP's real launcher up to handing its ASGI app to uvicorn.
+                            with patch("uvicorn.Server.serve", autospec=True) as serve:
+                                asyncio.run(run_v1_server_async(module.mcp, transport=transport))
+                            app = serve.await_args.args[0].config.app
+                        else:
+                            app = module.app
+                        with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+                            if transport == "http":
+                                self.assertEqual(401, client.post("/mcp", json=initialize, headers=accept).status_code)
+                                client.headers["Authorization"] = f"Bearer {self.TOKEN}"
+                                response = client.post("/mcp", json=initialize, headers=accept)
+                                self.assertEqual(200, response.status_code)
+                                self.assertIn('"serverInfo"', response.text)
+                            else:
+                                self.assertEqual(401, client.get("/sse").status_code)
+                                self.assertEqual(401, client.post("/messages/").status_code)
+                                client.headers["Authorization"] = f"Bearer {self.TOKEN}"
+                                # The SSE message handler requires a session ID after authentication.
+                                self.assertEqual(400, client.post("/messages/").status_code)
 
 
 class DeploymentDefaultsTests(unittest.TestCase):
@@ -1126,6 +1189,8 @@ class DeploymentDefaultsTests(unittest.TestCase):
         compose = (ROOT / "docker-compose.yml").read_text()
         self.assertIn('"${MCP_PUBLISH_HOST:-127.0.0.1}:8000:8000"', compose)
         self.assertIn("MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}", compose)
+        for name, default in (("RESPONSE_CACHE_MAX_AGE_HOURS", 24), ("RESPONSE_CACHE_MAX_MB", 100)):
+            self.assertIn(f"{name}: ${{{name}:-{default}}}", compose)
 
     def test_documented_docker_run_commands_publish_on_loopback(self):
         import re
